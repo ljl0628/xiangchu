@@ -31,7 +31,7 @@ func (c *Client) JSAPI(ctx context.Context, openid, paymentNo string, amountFen 
 		return &PayParams{Mock: true, PaymentNo: paymentNo}, nil
 	}
 	var out struct {
-		PrepayID string `json:"prepay_id"`
+		PrepayID string `json:"prepay_id"` // PrepayID（预支付交易会话标识）是微信侧的"预付单号"
 	}
 	body := map[string]any{
 		"appid":        c.cfg.AppID,

@@ -26,6 +26,7 @@ const (
 	QueueNotify       = "q.notify"
 	QueueDead         = "q.dead"
 
+	// 路由键（routing key）
 	KeyOrderTimeout  = "order.timeout"
 	KeyPaySuccess    = "pay.success"
 	KeyPayRefunded   = "pay.refunded"

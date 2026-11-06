@@ -95,6 +95,16 @@ func (r *Repo) ListIngredientsByIDs(ctx context.Context, ids []int64) ([]*Ingred
 func (r *Repo) LockStock(ctx context.Context, items []*PurchaseItem) error {
 	return r.q(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, it := range items {
+			// gorm.Expr 把值编译成 SQL 表达式，读改写在一条 UPDATE 内原子完成；
+			// 若直接写 "stock": it.Quantity 会变成 SET stock = 5 的绝对赋值，
+			// 并发接单互相覆盖导致丢更新。
+			// 生成的 SQL（以 ingredient_id=42、quantity=5 为例）：
+			//   UPDATE ingredients
+			//   SET stock = stock - 5,
+			//       locked_stock = locked_stock + 5,
+			//       updated_at = '...'                -- GORM 自动维护
+			//   WHERE id = 42 AND stock >= 5
+			//   -- "检查够不够 + 扣减"在同一行锁内完成；RowsAffected=0 即库存不足
 			res := tx.Model(&Ingredient{}).
 				Where("id = ? AND stock >= ?", it.IngredientID, it.Quantity).
 				Updates(map[string]any{
