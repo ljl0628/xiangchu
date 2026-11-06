@@ -29,14 +29,15 @@
 
 ## 快速开始（本地开发）
 
-后端依赖本机 MySQL / Redis / RabbitMQ（RabbitMQ 需启用 `rabbitmq_delayed_message_exchange` 插件）：
+中间件（MySQL / Redis / RabbitMQ 延迟插件）用 Docker 一键起，容器名 `xiangchu-*`，端口 3310 / 6381 / 5673：
 
 ```bash
-# 1. 修改 server/configs/config.yaml 中的 mysql 密码等
-# 2. 启动
+docker compose -f docker-compose.dev.yml up -d
+# RabbitMQ 管理台 http://localhost:15673 (guest/guest)——注意不是 15672
+
 cd server
-go run ./cmd/server -c configs/config.yaml
-# 首次启动自动建表 + 写入种子数据：管理员 admin/admin123
+task server:migrate    # 首次建表 + 写入种子数据：管理员 admin/admin123
+task server:run
 ```
 
 前端：

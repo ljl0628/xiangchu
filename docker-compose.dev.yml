@@ -1,0 +1,60 @@
+# 开发环境中间件：MySQL + Redis + RabbitMQ(延迟插件)，容器名统一 xiangchu- 前缀
+# 启动：docker compose -f docker-compose.dev.yml up -d
+# 宿主机端口刻意避开常用值（本机原生 MySQL 占 3306、其他项目容器占 6379/5672 等）：
+#   MySQL 3310 / Redis 6381 / RabbitMQ 5673（管理控制台 15673，guest/guest）
+# server/configs/config.yaml 的 dsn/addr 与这些端口一一对应
+services:
+  mysql:
+    container_name: xiangchu-mysql
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: xiangchu
+      MYSQL_USER: xiangchu
+      MYSQL_PASSWORD: "xc123456"
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p123456"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "3310:3306"
+
+  redis:
+    container_name: xiangchu-redis
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "6381:6379"
+
+  rabbitmq:
+    container_name: xiangchu-rabbitmq
+    build: ./deploy/rabbitmq
+    hostname: xiangchu-rabbitmq
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    ports:
+      - "5673:5672"   # AMQP，config.yaml 已指向此端口
+      - "15673:15672" # 管理控制台
+
+volumes:
+  mysql-data:
+    name: xiangchu-dev-mysql-data
+  redis-data:
+    name: xiangchu-dev-redis-data
+  rabbitmq-data:
+    name: xiangchu-dev-rabbitmq-data

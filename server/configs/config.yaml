@@ -1,21 +1,22 @@
 # 乡厨系统配置（开发环境默认值）
 app:
   name: xiangchu
-  mode: dev            # dev | prod
+  mode: dev # dev | prod
   version: 1.0.0
 
 http:
   addr: ":8080"
 
 log:
-  level: info          # debug | info | warn | error
+  level: info # debug | info | warn | error
   file: logs/server.log
   max_size_mb: 100
   max_backups: 7
   max_age_days: 30
 
 mysql:
-  dsn: "xiangchu:xc123456@tcp(127.0.0.1:3306)/xiangchu?charset=utf8mb4&parseTime=True&loc=Local"
+  # 指向 docker-compose.dev.yml 的 xiangchu-mysql 容器（宿主机 3310，避让本机原生 MySQL）
+  dsn: "xiangchu:xc123456@tcp(127.0.0.1:3310)/xiangchu?charset=utf8mb4&parseTime=True&loc=Local"
   # 表结构统一走 golang-migrate（task server:migrate）；置 true 会跳过迁移自动改表，
   # 与迁移文件混用会产生重复列冲突，仅作应急开关
   auto_migrate: false
@@ -23,7 +24,8 @@ mysql:
   max_idle_conns: 10
 
 redis:
-  addr: "127.0.0.1:6390"
+  # 指向 docker-compose.dev.yml 的 xiangchu-redis 容器（宿主机 6381，避让本机其他项目）
+  addr: "127.0.0.1:6381"
   password: ""
   db: 0
 
@@ -41,11 +43,11 @@ sms:
   dev_code: "123456"
 
 wx:
-  mp:                  # 微信小程序（code2session）
+  mp: # 微信小程序（code2session）
     enabled: false
     app_id: ""
     secret: ""
-  pay:                 # 微信支付 V3；mock=true 时不依赖商户号即可联调
+  pay: # 微信支付 V3；mock=true 时不依赖商户号即可联调
     enabled: false
     mock: true
     app_id: ""
@@ -55,16 +57,16 @@ wx:
     apiv3_key: ""
     notify_url: "https://your-domain.com/api/v1/pay/notify/wx"
 
-qiniu:                 # 区域必须显式指定：z0 华东 / z1 华北 / na0 北美 / as0 东南亚
+qiniu: # 区域必须显式指定：z0 华东 / z1 华北 / na0 北美 / as0 东南亚
   ak: ""
   sk: ""
   bucket: ""
   domain: ""
   region: "z0"
 
-finance:               # 金额一律 int64 分；费率用基点 BP（1% = 100BP）
-  chef_commission_bp: 300      # 乡厨佣金 3%
-  supplier_commission_bp: 100  # 供应商佣金 1%
-  deposit_bp: 3000             # 定金 30%
-  settle_delay_days: 7         # 结算冻结期：完成后满 7 天自动可提（盖住售后窗口期）
-  auto_release_max_amount: 200000  # 单笔 ≤ ¥2000 系统自动放行并 mock 打款，超过转人工审核
+finance: # 金额一律 int64 分；费率用基点 BP（1% = 100BP）
+  chef_commission_bp: 300 # 乡厨佣金 3%
+  supplier_commission_bp: 100 # 供应商佣金 1%
+  deposit_bp: 3000 # 定金 30%
+  settle_delay_days: 7 # 结算冻结期：完成后满 7 天自动可提（盖住售后窗口期）
+  auto_release_max_amount: 200000 # 单笔 ≤ ¥2000 系统自动放行并 mock 打款，超过转人工审核

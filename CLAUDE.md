@@ -22,7 +22,7 @@ task server:stop     # 停掉占用 8080 的进程
 
 也可直接 `cd server && go run ./cmd/server -c configs/config.yaml`。配置在 `server/configs/config.yaml`，任何配置项可用 `XC_` 前缀环境变量覆盖（如 `XC_MYSQL_DSN`）。
 
-前置依赖：本机 MySQL 8 / Redis 7 / RabbitMQ（需启用 `rabbitmq_delayed_message_exchange` 插件）。首次使用先 `task server:migrate` 建表再启动服务（种子自动写入管理员 admin/admin123）。表结构统一走 golang-migrate；`mysql.auto_migrate: true` 仅作应急开关（与迁移混用会重复列冲突）。
+前置依赖：`docker compose -f docker-compose.dev.yml up -d` 一键起三个中间件容器（`xiangchu-mysql` / `xiangchu-redis` / `xiangchu-rabbitmq`，延迟插件已内置；宿主机端口 3310 / 6381 / 5673，避让本机原生 MySQL 与其他项目容器，RabbitMQ 管理台 http://localhost:15673 guest/guest）。首次使用先 `task server:migrate` 建表再启动服务（种子自动写入管理员 admin/admin123）。表结构统一走 golang-migrate；`mysql.auto_migrate: true` 仅作应急开关（与迁移混用会重复列冲突）。
 
 ### 前端（pnpm workspace，目录 web/）
 
