@@ -1061,6 +1061,33 @@ definitions:
     - contact_name
     - contact_phone
     type: object
+  user.AdminCouponVO:
+    properties:
+      amount:
+        description: 分
+        type: integer
+      created_at:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      received_count:
+        type: integer
+      status:
+        type: integer
+      threshold:
+        description: 分
+        type: integer
+      total_count:
+        type: integer
+      type:
+        type: integer
+      valid_from:
+        type: string
+      valid_to:
+        type: string
+    type: object
   user.AdminUserVO:
     properties:
       avatar:
@@ -1081,6 +1108,33 @@ definitions:
       status:
         type: integer
     type: object
+  user.CouponReq:
+    properties:
+      amount:
+        minimum: 1
+        type: integer
+      name:
+        maxLength: 64
+        type: string
+      threshold:
+        minimum: 0
+        type: integer
+      total_count:
+        minimum: 1
+        type: integer
+      type:
+        description: 目前仅 1=满减
+        type: integer
+      valid_from:
+        type: string
+      valid_to:
+        type: string
+    required:
+    - name
+    - type
+    - valid_from
+    - valid_to
+    type: object
   user.CouponVO:
     properties:
       amount:
@@ -1089,12 +1143,33 @@ definitions:
         type: integer
       name:
         type: string
+      received:
+        description: 当前用户已持有该券（未登录恒为 false）
+        type: boolean
       threshold:
         type: integer
       type:
         type: integer
       valid_to:
         type: string
+    type: object
+  user.GrantReq:
+    properties:
+      user_ids:
+        items:
+          type: integer
+        maxItems: 500
+        minItems: 1
+        type: array
+    required:
+    - user_ids
+    type: object
+  user.GrantResult:
+    properties:
+      granted:
+        type: integer
+      skipped:
+        type: integer
     type: object
   user.LoginByCodeReq:
     properties:
@@ -1199,6 +1274,7 @@ definitions:
       name:
         type: string
       status:
+        description: 0未用 2订单占用 1已使用
         type: integer
       threshold:
         type: integer
@@ -1442,6 +1518,170 @@ paths:
       security:
       - BearerAuth: []
       summary: 乡厨统计
+      tags:
+      - 管理端
+  /admin/coupons:
+    get:
+      description: admin 角色；含下架券，可按状态筛选
+      parameters:
+      - description: 状态 1上架 0下架，缺省全部
+        in: query
+        name: status
+        type: integer
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 10
+        description: 每页条数
+        in: query
+        maximum: 100
+        name: size
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.R'
+            - properties:
+                data:
+                  allOf:
+                  - $ref: '#/definitions/response.PageList'
+                  - properties:
+                      list:
+                        items:
+                          $ref: '#/definitions/user.AdminCouponVO'
+                        type: array
+                    type: object
+              type: object
+      security:
+      - BearerAuth: []
+      summary: 优惠券模板列表
+      tags:
+      - 管理端
+    post:
+      consumes:
+      - application/json
+      description: admin 角色；金额单位分，暂仅满减券（type=1）
+      parameters:
+      - description: 券模板参数
+        in: body
+        name: req
+        required: true
+        schema:
+          $ref: '#/definitions/user.CouponReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.R'
+            - properties:
+                data:
+                  additionalProperties:
+                    format: int64
+                    type: integer
+                  type: object
+              type: object
+      security:
+      - BearerAuth: []
+      summary: 创建优惠券模板
+      tags:
+      - 管理端
+  /admin/coupons/{id}:
+    put:
+      consumes:
+      - application/json
+      description: admin 角色；received_count/status 不经此入口；总量不得小于已领数
+      parameters:
+      - description: 券ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 券模板参数
+        in: body
+        name: req
+        required: true
+        schema:
+          $ref: '#/definitions/user.CouponReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.R'
+      security:
+      - BearerAuth: []
+      summary: 编辑优惠券模板
+      tags:
+      - 管理端
+  /admin/coupons/{id}/grant:
+    post:
+      consumes:
+      - application/json
+      description: admin 角色；已持有的用户自动跳过；剩余量不足整体回滚
+      parameters:
+      - description: 券ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 用户ID列表（≤500）
+        in: body
+        name: req
+        required: true
+        schema:
+          $ref: '#/definitions/user.GrantReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.R'
+            - properties:
+                data:
+                  $ref: '#/definitions/user.GrantResult'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: 发放优惠券给指定用户
+      tags:
+      - 管理端
+  /admin/coupons/{id}/status:
+    post:
+      consumes:
+      - application/json
+      description: admin 角色；下架只挡领取与发放，不阻断已领券在有效期内使用
+      parameters:
+      - description: 券ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: '{status: 0|1}'
+        in: body
+        name: req
+        required: true
+        schema:
+          $ref: '#/definitions/user.StatusReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.R'
+      security:
+      - BearerAuth: []
+      summary: 上下架优惠券模板
       tags:
       - 管理端
   /admin/dicts:
@@ -2841,6 +3081,7 @@ paths:
       - 乡厨域
   /coupons:
     get:
+      description: 需登录；received 标记当前用户已持有的券
       parameters:
       - default: "1"
         description: 仅有效券
@@ -2880,7 +3121,7 @@ paths:
                         type: array
                     type: object
               type: object
-      summary: 券中心列表（公开）
+      summary: 券中心列表
       tags:
       - 用户域
   /ingredients:

@@ -360,7 +360,7 @@ CREATE TABLE `user_coupons` (
   `expire_at` datetime(3) DEFAULT NULL,
   `created_at` datetime(3) DEFAULT NULL,
   PRIMARY KEY (`id`),
-  KEY `idx_user_coupons_user_id` (`user_id`),
+  UNIQUE KEY `uk_user_coupon` (`user_id`,`coupon_id`),
   KEY `idx_user_coupons_order_id` (`order_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;

@@ -48,12 +48,14 @@ type Coupon struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// UserCoupon 用户持有的优惠券实例
+// UserCoupon 用户持有的优惠券实例（一人一券：uk_user_coupon 唯一约束）
+// Status：0 未用（可下单选用）→ 2 订单占用（下单锁券，未支付）→ 1 已使用（支付核销）；
+// 取消/超时/拒绝释放回 0
 type UserCoupon struct {
 	ID        int64     `gorm:"primaryKey" json:"id"`
-	UserID    int64     `gorm:"index" json:"user_id"`
-	CouponID  int64     `json:"coupon_id"`
-	Status    int8      `json:"status"`
+	UserID    int64     `gorm:"uniqueIndex:uk_user_coupon" json:"user_id"`
+	CouponID  int64     `gorm:"uniqueIndex:uk_user_coupon" json:"coupon_id"`
+	Status    int8      `json:"status"` // 0未用 2订单占用 1已使用
 	OrderID   int64     `gorm:"index" json:"order_id"`
 	ExpireAt  time.Time `json:"expire_at"`
 	CreatedAt time.Time `json:"created_at"`

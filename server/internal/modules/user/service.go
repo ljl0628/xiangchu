@@ -41,11 +41,19 @@ type Service interface {
 	GetAddress(ctx context.Context, uid, id int64) (*UserAddress, error)
 	SaveAddress(ctx context.Context, uid, id int64, req *AddressReq) (int64, error)
 	DeleteAddress(ctx context.Context, uid, id int64) error
-	ListCoupon(ctx context.Context, onlyActive bool, page, size int) ([]*CouponVO, int64, error)
+	ListCoupon(ctx context.Context, uid int64, onlyActive bool, page, size int) ([]*CouponVO, int64, error)
 	ReceiveCoupon(ctx context.Context, uid, couponID int64) error
 	MyCoupons(ctx context.Context, uid int64) ([]*UserCouponVO, error)
 	UseCoupon(ctx context.Context, uid, ucID, orderID int64) error
+	OccupyCoupon(ctx context.Context, uid, ucID int64) error
 	ReleaseCoupon(ucID int64) error
+
+	// ---- 管理端券模板 ----
+	ListCouponForAdmin(ctx context.Context, status *int8, page, size int) ([]*AdminCouponVO, int64, error)
+	CreateCoupon(ctx context.Context, req *CouponReq) (int64, error)
+	UpdateCoupon(ctx context.Context, id int64, req *CouponReq) error
+	SetCouponStatus(ctx context.Context, id int64, status int8) error
+	GrantCoupon(ctx context.Context, couponID int64, userIDs []int64) (*GrantResult, error)
 }
 
 // ProfileChecker 由 bootstrap 注入，实现方为 chef / supplier 模块
@@ -373,13 +381,16 @@ func (s *serviceImpl) DeleteAddress(ctx context.Context, uid, id int64) error {
 
 // ---------- 优惠券 ----------
 
-func (s *serviceImpl) ListCoupon(ctx context.Context, onlyActive bool, page, size int) ([]*CouponVO, int64, error) {
+// ListCoupon 券中心：uid>0 时附带"当前用户已持有"标记，未登录恒为 false
+func (s *serviceImpl) ListCoupon(ctx context.Context, uid int64, onlyActive bool, page, size int) ([]*CouponVO, int64, error) {
 	list, total, err := s.repo.ListCoupon(ctx, onlyActive, page, size)
 	if err != nil {
 		return nil, 0, err
 	}
 	vos := make([]*CouponVO, 0, len(list))
+	ids := make([]int64, 0, len(list))
 	for _, c := range list {
+		ids = append(ids, c.ID)
 		vos = append(vos, &CouponVO{
 			ID:        c.ID,
 			Name:      c.Name,
@@ -389,29 +400,35 @@ func (s *serviceImpl) ListCoupon(ctx context.Context, onlyActive bool, page, siz
 			ValidTo:   c.ValidTo,
 		})
 	}
+	// 批量标记已持有：一次 IN 查询，未登录（uid=0）时 repo 直接返回空
+	held, err := s.repo.HeldCouponIDs(ctx, uid, ids)
+	fmt.Println("=======>", held)
+	if err != nil {
+		return nil, 0, err
+	}
+	heldSet := make(map[int64]struct{}, len(held))
+	for _, id := range held {
+		heldSet[id] = struct{}{}
+	}
+	for _, vo := range vos {
+		if _, ok := heldSet[vo.ID]; ok {
+			vo.Received = true
+		}
+	}
 	return vos, total, nil
 }
 
-// ReceiveCoupon 领取优惠券（校验有效期与剩余数量）
+// ReceiveCoupon 领取优惠券：预检只为友好文案（404/下架/过期），
+// 防超发与防重全权交给 ReceiveCouponTxn 的条件更新（库存与时效的唯一权威）。
 func (s *serviceImpl) ReceiveCoupon(ctx context.Context, uid, couponID int64) error {
-	c, err := s.repo.GetCoupon(ctx, int(couponID))
+	c, err := s.repo.GetCoupon(ctx, couponID)
 	if err != nil {
 		return err
 	}
 	if c.Status != 1 || time.Now().After(c.ValidTo) {
 		return errs.BadRequest("优惠券已过期或下架")
 	}
-	if c.ReceivedCount >= c.TotalCount {
-		return errs.BadRequest("优惠券已抢完")
-	}
-	if err := s.repo.IncrCouponReceived(ctx, c.ID); err != nil {
-		return err
-	}
-	return s.repo.CreateUserCoupon(ctx, &UserCoupon{
-		UserID:   uid,
-		CouponID: couponID,
-		ExpireAt: c.ValidTo,
-	})
+	return s.repo.ReceiveCouponTxn(ctx, uid, couponID, c.ValidTo)
 }
 
 // MyCoupons 我持有的优惠券列表（联表带出券模板信息）
@@ -428,7 +445,7 @@ func (s *serviceImpl) MyCoupons(ctx context.Context, uid int64) ([]*UserCouponVO
 			Status:   uc.Status,
 			ExpireAt: uc.ExpireAt,
 		}
-		if c, err := s.repo.GetCoupon(ctx, int(uc.CouponID)); err == nil {
+		if c, err := s.repo.GetCoupon(ctx, uc.CouponID); err == nil {
 			vo.Name = c.Name
 			vo.Type = c.Type
 			vo.Threshold = c.Threshold
@@ -437,6 +454,11 @@ func (s *serviceImpl) MyCoupons(ctx context.Context, uid int64) ([]*UserCouponVO
 		vos = append(vos, vo)
 	}
 	return vos, nil
+}
+
+// OccupyCoupon 下单锁券：条件更新 0→2，抢不到即已被其他订单占用
+func (s *serviceImpl) OccupyCoupon(ctx context.Context, uid, ucID int64) error {
+	return s.repo.OccupyCoupon(ctx, uid, ucID)
 }
 
 // UseCoupon 支付成功后标记优惠券已使用
@@ -465,4 +487,120 @@ func (s *serviceImpl) WebLogin(ctx context.Context, phone, pwd string) (*LoginRe
 		return nil, errs.BadRequest("账号或密码错误")
 	}
 	return s.login(ctx, u)
+}
+
+// ---------- 管理端券模板 ----------
+
+// ListCouponForAdmin 管理端券模板列表（含下架，可按状态筛选）
+func (s *serviceImpl) ListCouponForAdmin(ctx context.Context, status *int8, page, size int) ([]*AdminCouponVO, int64, error) {
+	list, total, err := s.repo.AdminListCoupon(ctx, status, page, size)
+	if err != nil {
+		return nil, 0, err
+	}
+	vos := make([]*AdminCouponVO, 0, len(list))
+	for _, c := range list {
+		vos = append(vos, toAdminCouponVO(c))
+	}
+	return vos, total, nil
+}
+
+func toAdminCouponVO(c *Coupon) *AdminCouponVO {
+	return &AdminCouponVO{
+		ID: c.ID, Name: c.Name, Type: c.Type,
+		Threshold: c.Threshold, Amount: c.Amount,
+		ValidFrom: c.ValidFrom, ValidTo: c.ValidTo,
+		TotalCount: c.TotalCount, ReceivedCount: c.ReceivedCount,
+		Status: c.Status, CreatedAt: c.CreatedAt,
+	}
+}
+
+// CreateCoupon 创建券模板
+func (s *serviceImpl) CreateCoupon(ctx context.Context, req *CouponReq) (int64, error) {
+	c, err := buildCoupon(req, nil)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.repo.CreateCoupon(ctx, c); err != nil {
+		return 0, err
+	}
+	return c.ID, nil
+}
+
+// UpdateCoupon 编辑券模板（received_count/status 不可经此入口修改）
+func (s *serviceImpl) UpdateCoupon(ctx context.Context, id int64, req *CouponReq) error {
+	old, err := s.repo.GetCoupon(ctx, id)
+	if err != nil {
+		return err
+	}
+	c, err := buildCoupon(req, old)
+	if err != nil {
+		return err
+	}
+	c.ID = old.ID // buildCoupon 不回填主键，repo 的 WHERE id = ? 依赖它
+	fields := []string{"name", "type", "threshold", "amount", "valid_from", "valid_to", "total_count"}
+	return s.repo.UpdateCoupon(ctx, c, fields...)
+}
+
+// SetCouponStatus 上架/下架券模板（只挡领取与发放，不阻断已领券使用）
+func (s *serviceImpl) SetCouponStatus(ctx context.Context, id int64, status int8) error {
+	if status != 0 && status != 1 {
+		return errs.BadRequest("非法状态值")
+	}
+	return s.repo.SetCouponStatus(ctx, id, status)
+}
+
+// GrantCoupon 管理端手动发放：入参去重，预检给友好文案，判定权威在 GrantCouponTxn
+func (s *serviceImpl) GrantCoupon(ctx context.Context, couponID int64, userIDs []int64) (*GrantResult, error) {
+	ids := dedupe(userIDs)
+	if len(ids) == 0 {
+		return &GrantResult{}, nil
+	}
+	c, err := s.repo.GetCoupon(ctx, couponID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if c.Status != 1 || !now.Before(c.ValidTo) {
+		return nil, errs.BadRequest("券已下架或已过期，无法发放")
+	}
+	// 剩余量不做服务层拦截：全部已持有时 repo 返回 granted=0（合法），
+	// 真正超发由 GrantCouponTxn 条件递增回滚兜底
+	granted, err := s.repo.GrantCouponTxn(ctx, couponID, ids, c.ValidTo)
+	if err != nil {
+		return nil, err
+	}
+	return &GrantResult{Granted: granted, Skipped: int64(len(ids)) - granted}, nil
+}
+
+// buildCoupon 请求转模板（old 传 nil 表示创建；编辑时校验总量不得小于已领数）
+func buildCoupon(req *CouponReq, old *Coupon) (*Coupon, error) {
+	if req.Type != 1 {
+		return nil, errs.BadRequest("暂仅支持满减券（type=1）")
+	}
+	if !req.ValidTo.After(req.ValidFrom) {
+		return nil, errs.BadRequest("有效期止必须晚于有效期起")
+	}
+	if old != nil && req.TotalCount < old.ReceivedCount {
+		return nil, errs.BadRequest(fmt.Sprintf("总量不能小于已领数量（已领 %d）", old.ReceivedCount))
+	}
+	return &Coupon{
+		Name: req.Name, Type: req.Type,
+		Threshold: req.Threshold, Amount: req.Amount,
+		ValidFrom: req.ValidFrom, ValidTo: req.ValidTo,
+		TotalCount: req.TotalCount,
+		Status:     StatusEnabled, // 创建即上架
+	}, nil
+}
+
+// dedupe 保序去重
+func dedupe(ids []int64) []int64 {
+	seen := make(map[int64]bool, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, v := range ids {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }

@@ -90,6 +90,7 @@ type CouponVO struct {
 	Threshold int64     `json:"threshold"`
 	Amount    int64     `json:"amount"`
 	ValidTo   time.Time `json:"valid_to"`
+	Received  bool      `json:"received"` // 当前用户已持有该券（未登录恒为 false）
 }
 
 // UserCouponVO is a coupon held by a user.
@@ -100,6 +101,43 @@ type UserCouponVO struct {
 	Type      int8      `json:"type"`
 	Threshold int64     `json:"threshold"`
 	Amount    int64     `json:"amount"`
-	Status    int8      `json:"status"`
+	Status    int8      `json:"status"` // 0未用 2订单占用 1已使用
 	ExpireAt  time.Time `json:"expire_at"`
+}
+
+// AdminCouponVO 管理端券模板全字段视图
+type AdminCouponVO struct {
+	ID            int64     `json:"id"`
+	Name          string    `json:"name"`
+	Type          int8      `json:"type"`
+	Threshold     int64     `json:"threshold"` // 分
+	Amount        int64     `json:"amount"`    // 分
+	ValidFrom     time.Time `json:"valid_from"`
+	ValidTo       time.Time `json:"valid_to"`
+	TotalCount    int       `json:"total_count"`
+	ReceivedCount int       `json:"received_count"`
+	Status        int8      `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// CouponReq 创建/编辑券模板（金额单位分；received_count/status 不经此入口）
+type CouponReq struct {
+	Name       string    `json:"name" binding:"required,max=64"`
+	Type       int8      `json:"type" binding:"required"` // 目前仅 1=满减
+	Threshold  int64     `json:"threshold" binding:"min=0"`
+	Amount     int64     `json:"amount" binding:"min=1"`
+	ValidFrom  time.Time `json:"valid_from" binding:"required"`
+	ValidTo    time.Time `json:"valid_to" binding:"required"`
+	TotalCount int       `json:"total_count" binding:"min=1"`
+}
+
+// GrantReq 手动发放
+type GrantReq struct {
+	UserIDs []int64 `json:"user_ids" binding:"required,min=1,max=500"`
+}
+
+// GrantResult 发放结果
+type GrantResult struct {
+	Granted int64 `json:"granted"`
+	Skipped int64 `json:"skipped"`
 }

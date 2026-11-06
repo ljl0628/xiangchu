@@ -60,6 +60,10 @@
             <el-icon><ShoppingCart /></el-icon>
             <span>采购管理</span>
           </el-menu-item>
+          <el-menu-item index="/coupons">
+            <el-icon><Ticket /></el-icon>
+            <span>优惠券管理</span>
+          </el-menu-item>
           <el-sub-menu index="finance">
             <template #title>
               <el-icon><Money /></el-icon>
@@ -117,6 +121,7 @@ import {
   Shop,
   ShoppingCart,
   SwitchButton,
+  Ticket,
   User,
   UserFilled,
 } from '@element-plus/icons-vue'

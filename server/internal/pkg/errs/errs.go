@@ -24,4 +24,6 @@ var (
 	ErrScheduleTaken = New(40901, "该日期档期已被占用")
 	ErrStockShort    = New(40902, "库存不足")
 	ErrAmountWrong   = New(40903, "金额校验失败")
+	ErrCouponTaken   = New(40904, "该优惠券已领取过")
+	ErrCouponSoldOut = New(40905, "优惠券已抢完")
 )

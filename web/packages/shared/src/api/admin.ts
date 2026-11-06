@@ -1,6 +1,6 @@
 // 管理后台 API
 import type { ApiClient } from '../request'
-import type { AdminInfo, AfterSale, Chef, Dicts, Income, Order, PageData, PurchaseOrder, Review, Settlement, Supplier, UserCoupon, OperationLog, Withdrawal, Ingredient } from '../types'
+import type { AdminInfo, AfterSale, Chef, Coupon, Dicts, GrantResult, Income, Order, PageData, PurchaseOrder, Review, Settlement, Supplier, UserCoupon, OperationLog, Withdrawal, Ingredient } from '../types'
 
 export function createAdminApi(c: ApiClient) {
   return {
@@ -37,5 +37,11 @@ export function createAdminApi(c: ApiClient) {
     orderStats: () => c.get<{ gmv: number; total: number; pending: number; completed: number; repurchase_rate: number; regions: { region: string; count: number }[] }>('/admin/stats'),
     chefStats: () => c.get<{ total: number; pending: number }>('/admin/chefs/stats'),
     supplierStats: () => c.get<{ total: number; pending: number }>('/admin/suppliers/stats'),
+    // 优惠券管理
+    coupons: (params: { status?: number; page?: number; size?: number } = {}) => c.get<PageData<Coupon>>('/admin/coupons', params),
+    createCoupon: (data: { name: string; type: number; threshold: number; amount: number; valid_from: string; valid_to: string; total_count: number }) => c.post<Coupon>('/admin/coupons', data),
+    updateCoupon: (id: number, data: { name: string; type: number; threshold: number; amount: number; valid_from: string; valid_to: string; total_count: number }) => c.put<Coupon>(`/admin/coupons/${id}`, data),
+    setCouponStatus: (id: number, status: number) => c.post(`/admin/coupons/${id}/status`, { status }),
+    grantCoupon: (id: number, user_ids: number[]) => c.post<GrantResult>(`/admin/coupons/${id}/grant`, { user_ids }),
   }
 }

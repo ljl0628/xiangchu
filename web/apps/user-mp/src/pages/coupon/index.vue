@@ -16,8 +16,8 @@
           <view class="strong">{{ c.name }}</view>
           <view class="muted">满减券 · {{ fmtDate(c.valid_to) }} 前有效</view>
         </view>
-        <view class="btn-primary btn-mini" :class="{ disabled: received.includes(c.id) }" @click="receive(c.id)">
-          {{ received.includes(c.id) ? '已领取' : '领取' }}
+        <view class="btn-primary btn-mini" :class="{ disabled: c.received }" @click="receive(c)">
+          {{ c.received ? '已领取' : '领取' }}
         </view>
       </view>
       <view v-if="!center.length && !loading" class="empty">暂无可领优惠券</view>
@@ -38,7 +38,7 @@
           <view class="muted">{{ fmtDate(c.expire_at) }} 前有效</view>
         </view>
         <text class="tag" :class="c.status === 0 ? 'tag-green' : 'tag-grey'">
-          {{ c.status === 0 ? '可用' : '已使用' }}
+          {{ c.status === 0 ? '可用' : c.status === 2 ? '使用中' : '已使用' }}
         </text>
       </view>
       <view v-if="!mine.length && !loading" class="empty">还没有优惠券，去领券中心看看</view>
@@ -60,7 +60,6 @@ const centerPage = ref(1)
 const centerFinished = ref(false)
 const mine = ref<UserCoupon[]>([])
 const loading = ref(false)
-const received = ref<number[]>([])
 
 const { isLogged } = useSession()
 
@@ -69,6 +68,10 @@ function fmtDate(s: string): string {
 }
 
 function loadCenter() {
+  if (!isLogged.value) {
+    center.value = []
+    return
+  }
   if (loading.value || centerFinished.value) return
   loading.value = true
   userApi
@@ -98,12 +101,12 @@ function switchTab(t: 'center' | 'mine') {
   if (t === 'mine') loadMine()
 }
 
-function receive(id: number) {
-  if (received.value.includes(id)) return
+function receive(c: Coupon) {
+  if (c.received) return
   userApi
-    .receiveCoupon(id)
+    .receiveCoupon(c.id)
     .then(() => {
-      received.value.push(id)
+      c.received = true
       uni.showToast({ title: '领取成功', icon: 'success' })
     })
     .catch((e: unknown) => uni.showToast({ title: errMsg(e), icon: 'none' }))

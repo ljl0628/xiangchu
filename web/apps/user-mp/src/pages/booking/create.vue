@@ -339,9 +339,15 @@ function submit() {
       pay_type: form.value.pay_type,
     })
     .then((res) => {
-      return handlePayResult({ payment_no: res.payment_no, params: res.params }).then(() => {
-        uni.redirectTo({ url: `/pages/order/detail?id=${res.order_id}&from=pay` })
-      })
+      // 订单创建即成立：支付取消/失败也必须进入订单详情（待支付），
+      // 停留在本页易导致重复下单并重复锁档期；详情页可「去支付」继续
+      return handlePayResult({ payment_no: res.payment_no, params: res.params })
+        .catch(() => {
+          uni.showToast({ title: '支付未完成，可稍后在订单中继续支付', icon: 'none' })
+        })
+        .finally(() => {
+          uni.redirectTo({ url: `/pages/order/detail?id=${res.order_id}&from=pay` })
+        })
     })
     .catch((e: unknown) => uni.showToast({ title: errMsg(e), icon: 'none' }))
     .finally(() => (submitting.value = false))

@@ -64,6 +64,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '采购管理', roles: ['admin'] },
       },
       {
+        path: 'coupons',
+        name: 'coupons',
+        component: () => import('@/views/Coupons.vue'),
+        meta: { title: '优惠券管理', roles: ['admin'] },
+      },
+      {
         path: 'finance/settlements',
         name: 'finance-settlements',
         component: () => import('@/views/Finance/Settlements.vue'),

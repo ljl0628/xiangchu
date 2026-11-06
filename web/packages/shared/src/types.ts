@@ -44,6 +44,19 @@ export interface Coupon {
   threshold: number
   amount: number
   valid_to: string
+  received?: boolean // 当前用户已持有（券中心"已领取"标记，未登录恒 false）
+  // 管理端全字段（消费侧接口不返回，均可选）
+  valid_from?: string
+  total_count?: number
+  received_count?: number
+  status?: number // 0已下架 1上架中
+  created_at?: string
+}
+
+// 发放结果：granted 实际新发放人数，skipped 已持有被跳过人数
+export interface GrantResult {
+  granted: number
+  skipped: number
 }
 
 export interface UserCoupon {
@@ -53,7 +66,7 @@ export interface UserCoupon {
   type: number
   threshold: number
   amount: number
-  status: number // 0未用 1已用
+  status: number // 0未用 2订单占用（下单锁券未支付） 1已使用
   expire_at: string
 }
 

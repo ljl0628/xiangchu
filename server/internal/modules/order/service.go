@@ -179,6 +179,10 @@ func (s *serviceImpl) Create(ctx context.Context, uid int64, req *CreateReq) (*C
 		UserCouponID: req.UserCouponID,
 	}
 	if err := s.repo.Create(ctx, o); err != nil {
+		// 建单失败回滚锁券，避免券卡在占用态
+		if req.UserCouponID > 0 {
+			_ = s.userSvc.ReleaseCoupon(req.UserCouponID)
+		}
 		return nil, err
 	}
 	pr, err := s.paySvc.CreatePayment(ctx, BizTypeOrder, o.ID, uid, deposit)
@@ -188,7 +192,8 @@ func (s *serviceImpl) Create(ctx context.Context, uid int64, req *CreateReq) (*C
 	return &CreateResp{OrderID: o.ID, OrderNo: o.OrderNo, Deposit: deposit, PaymentNo: pr.PaymentNo, Params: pr.Params}, nil
 }
 
-// chargeWithCoupon 券抵扣计价：仅支持满减券(type=1)，抵扣不超过应付
+// chargeWithCoupon 券抵扣计价 + 下单锁券：仅支持满减券(type=1)，抵扣不超过应付。
+// 校验通过后立即抢占占用（0→2），创建失败由调用方释放
 func (s *serviceImpl) chargeWithCoupon(ctx context.Context, uid, payable, ucID int64) (int64, error) {
 	if ucID <= 0 {
 		return payable, nil
@@ -205,6 +210,10 @@ func (s *serviceImpl) chargeWithCoupon(ctx context.Context, uid, payable, ucID i
 	}
 	if payable < c.Threshold {
 		return 0, errs.BadRequest("未达到该优惠券的使用门槛")
+	}
+	// 下单即锁券：条件更新 0→2 原子抢占，窗口期其他订单不可再选该券
+	if err := s.userSvc.OccupyCoupon(ctx, uid, ucID); err != nil {
+		return 0, err
 	}
 	discount := c.Amount
 	if discount > payable {
@@ -325,6 +334,10 @@ func (s *serviceImpl) Cancel(ctx context.Context, uid, id int64) error {
 			map[string]any{"cancel_reason": "用户未支付取消"})
 		if err != nil || !moved {
 			return errOrDenied(err)
+		}
+		// 释放下单时锁定的券（占用态 2→0；兼容存量已核销 1→0）
+		if o.UserCouponID > 0 {
+			_ = s.userSvc.ReleaseCoupon(o.UserCouponID)
 		}
 		return nil
 	case StatusPending:

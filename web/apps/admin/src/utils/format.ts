@@ -100,6 +100,12 @@ export const userStatusMap: Record<number, StatusMeta> = {
   1: { label: '正常', type: 'success' },
 }
 
+// 优惠券状态：0已下架 1上架中
+export const couponStatusMap: Record<number, StatusMeta> = {
+  0: { label: '已下架', type: 'info' },
+  1: { label: '上架中', type: 'success' },
+}
+
 export function statusMeta(map: Record<number, StatusMeta>, status?: number | null): StatusMeta {
   if (status === undefined || status === null || !(status in map)) {
     return { label: status === undefined || status === null ? '-' : String(status), type: 'info' }

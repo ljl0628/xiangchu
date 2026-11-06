@@ -1,10 +1,12 @@
 package user
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xiangchu/server/internal/middleware"
+	"github.com/xiangchu/server/internal/pkg/errs"
 	"github.com/xiangchu/server/internal/pkg/jwtx"
 	"github.com/xiangchu/server/internal/pkg/pagination"
 	"github.com/xiangchu/server/internal/pkg/response"
@@ -20,7 +22,7 @@ func NewHandler(svc Service, mk *jwtx.Maker) *Handler {
 	return &Handler{svc: svc, mk: mk}
 }
 
-// Routes 注册路由：登录/验证码/券中心公开，其余需登录
+// Routes 注册路由：登录/验证码公开，其余需登录（券中心需登录，见 g 组）
 func (h *Handler) Routes(r gin.IRouter) {
 	pub := r.Group("")
 	{
@@ -28,7 +30,6 @@ func (h *Handler) Routes(r gin.IRouter) {
 		pub.POST("/user/auth/login", h.loginByCode)
 		pub.POST("/user/auth/wx", h.wxLogin)
 		pub.POST("/user/auth/web", h.webLogin)
-		pub.GET("/coupons", h.listCoupons)
 	}
 
 	g := r.Group("", middleware.Auth(h.mk, "user"))
@@ -41,6 +42,7 @@ func (h *Handler) Routes(r gin.IRouter) {
 		g.POST("/user/addresses", h.saveAddress)
 		g.PUT("/user/addresses/:id", h.saveAddress)
 		g.DELETE("/user/addresses/:id", h.deleteAddress)
+		g.GET("/coupons", h.listCoupons)
 		g.GET("/user/coupons", h.myCoupons)
 		g.POST("/user/coupons/:id/receive", h.receiveCoupon)
 	}
@@ -49,6 +51,13 @@ func (h *Handler) Routes(r gin.IRouter) {
 	{
 		adm.GET("/users", h.adminListUsers)
 		adm.POST("/users/:id/status", h.adminSetUserStatus)
+
+		// 券模板管理（管理端）
+		adm.GET("/coupons", h.adminListCoupons)
+		adm.POST("/coupons", h.adminCreateCoupon)
+		adm.PUT("/coupons/:id", h.adminUpdateCoupon)
+		adm.POST("/coupons/:id/status", h.adminSetCouponStatus)
+		adm.POST("/coupons/:id/grant", h.adminGrantCoupon)
 	}
 }
 
@@ -299,10 +308,11 @@ func (h *Handler) deleteAddress(c *gin.Context) {
 
 // ---------- 优惠券 ----------
 
-// listCoupons 券中心（公开）
+// listCoupons 券中心（需登录）
 //
 //	@Tags		用户域
-//	@Summary	券中心列表（公开）
+//	@Summary	券中心列表
+//	@Description	需登录；received 标记当前用户已持有的券
 //	@Produce	json
 //	@Param		only_active	query		string	false	"仅有效券"	Default(1)	Enums(0,1)
 //	@Param		page		query		int		false	"页码"	Default(1)
@@ -318,7 +328,7 @@ func (h *Handler) listCoupons(c *gin.Context) {
 		return
 	}
 	onlyActive := c.DefaultQuery("only_active", "1") == "1"
-	list, total, err := h.svc.ListCoupon(c.Request.Context(), onlyActive, page, size)
+	list, total, err := h.svc.ListCoupon(c.Request.Context(), middleware.UID(c), onlyActive, page, size)
 	if err != nil {
 		response.Fail(c, err)
 		return
@@ -415,4 +425,150 @@ func (h *Handler) adminSetUserStatus(c *gin.Context) {
 		return
 	}
 	response.OK(c, nil)
+}
+
+// ---------- 管理端优惠券 ----------
+
+// adminListCoupons 券模板列表（管理端）
+//
+//	@Tags		管理端
+//	@Security	BearerAuth
+//	@Summary	优惠券模板列表
+//	@Description	admin 角色；含下架券，可按状态筛选
+//	@Param		status	query	int	false	"状态 1上架 0下架，缺省全部"
+//	@Param		page	query	int	false	"页码"	Default(1)
+//	@Param		size	query	int	false	"每页条数"	Default(10)	Maximum(100)
+//	@Success	200	{object}	response.R{data=response.PageList{list=[]user.AdminCouponVO}}
+//	@Router		/admin/coupons [get]
+func (h *Handler) adminListCoupons(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "10"))
+	page, size, err := pagination.Normalize(page, size)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	var status *int8
+	if v := c.DefaultQuery("status", ""); v != "" {
+		if n, e := strconv.Atoi(v); e == nil {
+			st := int8(n)
+			status = &st
+		}
+	}
+	list, total, err := h.svc.ListCouponForAdmin(c.Request.Context(), status, page, size)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, response.PageData(list, total, page, size))
+}
+
+// adminCreateCoupon 创建券模板（管理端）
+//
+//	@Tags		管理端
+//	@Security	BearerAuth
+//	@Summary	创建优惠券模板
+//	@Description	admin 角色；金额单位分，暂仅满减券（type=1）
+//	@Accept		json
+//	@Produce	json
+//	@Param		req	body	user.CouponReq	true	"券模板参数"
+//	@Success	200	{object}	response.R{data=map[string]int64}
+//	@Router		/admin/coupons [post]
+func (h *Handler) adminCreateCoupon(c *gin.Context) {
+	var req CouponReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errs.BadRequest("参数有误："+err.Error()))
+		return
+	}
+	id, err := h.svc.CreateCoupon(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"id": id})
+}
+
+// adminUpdateCoupon 编辑券模板（管理端）
+//
+//	@Tags		管理端
+//	@Security	BearerAuth
+//	@Summary	编辑优惠券模板
+//	@Description	admin 角色；received_count/status 不经此入口；总量不得小于已领数
+//	@Accept		json
+//	@Produce	json
+//	@Param		id	path		int	true	"券ID"
+//	@Param		req	body	user.CouponReq	true	"券模板参数"
+//	@Success	200	{object}	response.R
+//	@Router		/admin/coupons/{id} [put]
+func (h *Handler) adminUpdateCoupon(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var req CouponReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errs.BadRequest("参数有误："+err.Error()))
+		return
+	}
+	if err := h.svc.UpdateCoupon(c.Request.Context(), id, &req); err != nil {
+		// a, _ := json.MarshalIndent(err, "", "")
+		fmt.Println("======>", err)
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, nil)
+}
+
+// adminSetCouponStatus 上架/下架券模板（管理端）
+//
+//	@Tags		管理端
+//	@Security	BearerAuth
+//	@Summary	上下架优惠券模板
+//	@Description	admin 角色；下架只挡领取与发放，不阻断已领券在有效期内使用
+//	@Accept		json
+//	@Produce	json
+//	@Param		id	path		int	true	"券ID"
+//	@Param		req	body	user.StatusReq	true	"{status: 0|1}"
+//	@Success	200	{object}	response.R
+//	@Router		/admin/coupons/{id}/status [post]
+func (h *Handler) adminSetCouponStatus(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var req StatusReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errs.BadRequest("参数有误："+err.Error()))
+		return
+	}
+	if req.Status == nil {
+		response.Fail(c, errs.BadRequest("status 不能为空"))
+		return
+	}
+	if err := h.svc.SetCouponStatus(c.Request.Context(), id, *req.Status); err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, nil)
+}
+
+// adminGrantCoupon 手动发放（管理端）
+//
+//	@Tags		管理端
+//	@Security	BearerAuth
+//	@Summary	发放优惠券给指定用户
+//	@Description	admin 角色；已持有的用户自动跳过；剩余量不足整体回滚
+//	@Accept		json
+//	@Produce	json
+//	@Param		id	path		int				true	"券ID"
+//	@Param		req	body	user.GrantReq	true	"用户ID列表（≤500）"
+//	@Success	200	{object}	response.R{data=user.GrantResult}
+//	@Router		/admin/coupons/{id}/grant [post]
+func (h *Handler) adminGrantCoupon(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var req GrantReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errs.BadRequest("参数有误："+err.Error()))
+		return
+	}
+	result, err := h.svc.GrantCoupon(c.Request.Context(), id, req.UserIDs)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, result)
 }
