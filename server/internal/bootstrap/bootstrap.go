@@ -83,6 +83,9 @@ func Run(cfg *config.Config) error {
 	food.RegisterConsumers(bus, foodSvc)
 	notify.RunConsumer(bus, notify.NewLogNotifier())
 
+	// 查单补偿：微信回调丢失时定时扫描待支付单主动对齐（mock 模式内部自跳过）
+	paySvc.StartCompensator()
+
 	return runHTTP(cfg, mk, userSvc, chefSvc, supSvc, foodSvc, paySvc, orderSvc, adminSvc, adminRepo)
 }
 

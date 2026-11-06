@@ -60,6 +60,18 @@ func (r *Repo) TransitPayment(ctx context.Context, id int64, from, to int8) (boo
 	return res.RowsAffected > 0, res.Error
 }
 
+// ListStalePending 查单补偿扫描集：待支付且创建早于 before 的支付单。
+// 走 idx_payments_status_created；已补单/已关闭的行转入终态自动退出集合
+func (r *Repo) ListStalePending(ctx context.Context, before time.Time, limit int) ([]*Payment, error) {
+	var list []*Payment
+	err := r.q(ctx).
+		Where("status = ? AND created_at < ?", PayStatusPending, before).
+		Order("id ASC").
+		Limit(limit).
+		Find(&list).Error
+	return list, err
+}
+
 // SumGMV 已产生实付的支付单总额（含退款中/已退款）
 func (r *Repo) SumGMV(ctx context.Context) (int64, error) {
 	var sum int64

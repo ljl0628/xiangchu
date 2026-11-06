@@ -28,6 +28,8 @@ type Service interface {
 	HandleWxNotify(ctx context.Context, headers http.Header, body []byte) (string, error)
 	// MockPay 模拟支付（联调）：待支付 → 已支付
 	MockPay(ctx context.Context, paymentNo string) error
+	// StartCompensator 启动查单补偿循环（真实模式；回调丢失时主动向微信对齐支付结果）
+	StartCompensator()
 	// Refund 发起退款；mock 模式即时成功并发布 pay.refunded
 	Refund(ctx context.Context, paymentNo string, refundFen int64) error
 	// CreateSettlement 按费率生成结算单（v1 即时结算，status=1）

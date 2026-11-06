@@ -14,6 +14,7 @@ const (
 	PayStatusPaid      int8 = 1 // 已支付
 	PayStatusRefunding int8 = 2 // 退款中
 	PayStatusRefunded  int8 = 3 // 已退款
+	PayStatusClosed    int8 = 4 // 已关闭（查单补偿：微信侧未付过期/失败，终态，可重新拉起支付另建支付单）
 )
 
 // 结算/提现主体角色
@@ -51,7 +52,7 @@ type Payment struct {
 	BizID           int64      `gorm:"index" json:"biz_id"`
 	UserID          int64      `gorm:"index" json:"user_id"`
 	Amount          int64      `json:"amount"` // 分
-	Status          int8       `json:"status"` // 0待支付 1已支付 2退款中 3已退款
+	Status          int8       `json:"status"` // 0待支付 1已支付 2退款中 3已退款 4已关闭
 	WxTransactionID string     `gorm:"size:64" json:"wx_transaction_id"`
 	PayTime         *time.Time `json:"pay_time"`
 	ExpireTime      time.Time  `json:"expire_time"` // 2h

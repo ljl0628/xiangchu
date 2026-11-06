@@ -207,7 +207,8 @@ CREATE TABLE `payments` (
   UNIQUE KEY `idx_payments_payment_no` (`payment_no`),
   UNIQUE KEY `idx_payments_out_trade_no` (`out_trade_no`),
   KEY `idx_payments_biz_id` (`biz_id`),
-  KEY `idx_payments_user_id` (`user_id`)
+  KEY `idx_payments_user_id` (`user_id`),
+  KEY `idx_payments_status_created` (`status`,`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
