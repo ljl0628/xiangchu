@@ -91,8 +91,10 @@ type Refund struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
-// PaymentNotify 微信回调通知流水（append-only 审计）：一行一次推送。
-// uk = 微信通知 ID（重试推送同 ID）；先落行再处理，处理结果回填本行。
+// PaymentNotify 微信回调通知流水（处理台账）：一行一次推送，行不增不删，
+// 可变的仅处理进度三列（out_trade_no/result/error_msg）——结果只能处理完回填，
+// 故非严格 append-only；资金账的不可变性由 payments/refunds 条件流转保证。
+// uk = 微信通知 ID（重试推送同 ID）挡重复落行。
 // NotifyID 为空记 NULL——唯一键忽略 NULL，mock 明文回调（无信封 ID）不冲突
 type PaymentNotify struct {
 	ID         int64     `gorm:"primaryKey" json:"id"`
