@@ -238,6 +238,12 @@ func (s *serviceImpl) HandlePaySuccess(ctx context.Context, orderID int64, payme
 	if err := s.repo.RecalcPaid(ctx, orderID); err != nil {
 		return err
 	}
+	// 超付兜底：定金+尾款正常恰等于 amount；在途单唯一键防双开，此处为最后防线
+	if o2, e := s.repo.Get(ctx, orderID); e == nil && o2.PaidAmount > o2.Amount {
+		logger.L().Error("订单超付，需人工核对并退差额",
+			zap.Int64("order_id", orderID),
+			zap.Int64("paid", o2.PaidAmount), zap.Int64("amount", o2.Amount))
+	}
 	if o.Status != StatusUnpaid {
 		return nil // 首付已处理过，消息重投幂等返回
 	}

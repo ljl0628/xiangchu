@@ -29,6 +29,16 @@ const apiBase = "https://api.mch.weixin.qq.com"
 // errMockOnly is returned when real wxpay is not enabled.
 var errMockOnly = errors.New("real wxpay mode not enabled")
 
+// APIError 微信 V3 接口非 2xx 响应（调用方按 Status 区分处置，如关单遇 404 视为已关）
+type APIError struct {
+	Status int
+	Body   string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("微信支付接口错误 %d: %s", e.Status, e.Body)
+}
+
 // Client 微信支付 V3 客户端：JSAPI 下单、退款、回调验签解密。
 // Mock 模式下不依赖商户证书即可联调全流程。
 type Client struct {
@@ -121,8 +131,9 @@ func (c *Client) do(method, path string, reqBody any, out any) error {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("微信支付接口错误 %d: %s", resp.StatusCode, string(raw))
+	// 关单等接口成功返回 204 No Content（无响应体），一并视为成功
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return &APIError{Status: resp.StatusCode, Body: string(raw)}
 	}
 	if out != nil && len(raw) > 0 {
 		return json.Unmarshal(raw, out)

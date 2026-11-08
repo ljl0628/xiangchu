@@ -203,9 +203,11 @@ CREATE TABLE `payments` (
   `pay_time` datetime(3) DEFAULT NULL,
   `expire_time` datetime(3) DEFAULT NULL,
   `created_at` datetime(3) DEFAULT NULL,
+  `active_uk` varchar(64) GENERATED ALWAYS AS (case when (`status` = 0) then concat(`biz_type`,_utf8mb4':',`biz_id`) else NULL end) STORED,
   PRIMARY KEY (`id`),
   UNIQUE KEY `idx_payments_payment_no` (`payment_no`),
   UNIQUE KEY `idx_payments_out_trade_no` (`out_trade_no`),
+  UNIQUE KEY `uk_payments_active` (`active_uk`),
   KEY `idx_payments_biz_id` (`biz_id`),
   KEY `idx_payments_user_id` (`user_id`),
   KEY `idx_payments_status_created` (`status`,`created_at`)

@@ -2,8 +2,10 @@ package pay
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -70,6 +72,23 @@ func (r *Repo) ListStalePending(ctx context.Context, before time.Time, limit int
 		Limit(limit).
 		Find(&list).Error
 	return list, err
+}
+
+// ListPendingByBiz 业务单当前全部待支付支付单（含已过期未关单），
+// 创建幂等的在途判定用；正常情况下最多一笔（uk_payments_active 兜底）
+func (r *Repo) ListPendingByBiz(ctx context.Context, bizType int8, bizID int64) ([]*Payment, error) {
+	var list []*Payment
+	err := r.q(ctx).
+		Where("biz_type = ? AND biz_id = ? AND status = ?", bizType, bizID, PayStatusPending).
+		Order("id DESC").
+		Find(&list).Error
+	return list, err
+}
+
+// isDuplicateKey MySQL 1062 重复键（项目未开 GORM TranslateError，按驱动错误码判定）
+func isDuplicateKey(err error) bool {
+	var me *mysqldriver.MySQLError
+	return errors.As(err, &me) && me.Number == 1062
 }
 
 // SumGMV 已产生实付的支付单总额（含退款中/已退款）

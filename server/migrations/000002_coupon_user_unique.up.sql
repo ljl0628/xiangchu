@@ -2,7 +2,7 @@
 -- 说明：user_coupons 加 (user_id, coupon_id) 唯一键，存量重复行先去重
 --       （每组优先保留 status=0 未使用中最小 id，全组已用则保留最小 id）。
 --       uk 最左前缀可覆盖原 idx_user_coupons_user_id 单列查询，故一并删除。
--- 注意：docs/coupon-redemption-design.md（核销流水表）落地时版本号顺延为 000004（000003 已被查单补偿索引占用）。
+-- 注意：docs/coupon-redemption-design.md（核销流水表）落地时版本号按当时最新顺延。
 
 DELETE uc FROM user_coupons uc
 JOIN (

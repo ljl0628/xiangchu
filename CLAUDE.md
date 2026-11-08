@@ -71,7 +71,7 @@ Go 1.22 模块化单体（Gin + GORM）。`server/internal/`：
 
 - **响应**：一律 HTTP 200 + `R{code, msg, data}`，`code=0` 成功；错误经 `pkg/errs` 的 `*errs.Err` 传给 `response.Fail`。分页用 `response.PageData`
 - **金额一律 int64 分**，费率用基点 BP（3% = 300），计算用 shopspring/decimal，展示层分转元
-- **并发/幂等三处双保险**：档期锁 = Redis SETNX + `chef_schedules` 唯一索引；库存 = `locked_stock` 行级更新 + RowsAffected 校验防超卖；支付 = `payments.out_trade_no` 唯一索引 + 状态只向前流转
+- **并发/幂等四处双保险**：档期锁 = Redis SETNX + `chef_schedules` 唯一索引；库存 = `locked_stock` 行级更新 + RowsAffected 校验防超卖；支付记账 = `payments.out_trade_no` 唯一索引 + 状态只向前流转；支付创建 = 在途单复用/关旧建新 + 生成列条件唯一键 `uk_payments_active`（同业务单仅一笔在途，防双开超付）
 - 订单状态机：0待支付→1待接单→2已接单→3备菜中→4服务中→5已完成，6已取消/7已拒绝；待接单超 12 小时由 RabbitMQ 延迟消息（`xc.delay` 交换机）自动取消退款。改状态流转逻辑先看 order/service.go 与 docs/api.md 的状态机注释
 - MQ 拓扑：`xc.delay`（延迟）+ `xc.event`（topic）+ `xc.dlx`（死信），见 `internal/infra/mq`
 

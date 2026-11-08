@@ -80,7 +80,11 @@ func NewService(repo *Repo, wx *wxpay.Client, bus *mq.MQ, cfg *config.Config) Se
 
 func (s *serviceImpl) mock() bool { return s.cfg.Wx.Pay.Mock || !s.cfg.Wx.Pay.Enabled }
 
-// CreatePayment 创建支付单并下单
+// CreatePayment 创建支付单并返回 JSAPI 调起参数（bizType 1宴席 2采购）。
+// 创建幂等：同业务单同时只允许一笔在途支付单——
+//   - 在途且金额一致（含足够剩余有效期）→ 直接复用，双击/重试天然幂等
+//   - 在途但金额不同（定金已付转尾款）或已过期 → 微信关单 + 本地关闭后建新
+//   - 并发双开由生成列唯一键 uk_payments_active 兜底（撞 1062 回查复用）
 func (s *serviceImpl) CreatePayment(ctx context.Context, bizType int, bizID, userID, amount int64) (*PayResult, error) {
 	if bizType != int(BizTypeBanquet) && bizType != int(BizTypePurchase) {
 		return nil, errs.BadRequest("不支持的支付业务类型")
@@ -88,6 +92,44 @@ func (s *serviceImpl) CreatePayment(ctx context.Context, bizType int, bizID, use
 	if amount <= 0 {
 		return nil, errs.ErrAmountWrong
 	}
+	pending, err := s.repo.ListPendingByBiz(ctx, int8(bizType), bizID)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range pending {
+		switch planFor(p, amount, time.Now()) {
+		case planReuse:
+			return s.reusePayment(ctx, p, userID)
+		case planCloseAndCreate:
+			if err := s.closePending(ctx, p); err != nil {
+				return nil, err
+			}
+		}
+	}
+	res, err := s.createOnce(ctx, bizType, bizID, userID, amount)
+	if err == nil || !isDuplicateKey(err) {
+		return res, err
+	}
+	// 并发请求撞在途唯一键：回查对手单，可复用则复用，否则关旧重试一次
+	pending, e := s.repo.ListPendingByBiz(ctx, int8(bizType), bizID)
+	if e != nil {
+		return nil, err
+	}
+	for _, p := range pending {
+		if planFor(p, amount, time.Now()) == planReuse {
+			return s.reusePayment(ctx, p, userID)
+		}
+	}
+	for _, p := range pending {
+		if err := s.closePending(ctx, p); err != nil {
+			return nil, err
+		}
+	}
+	return s.createOnce(ctx, bizType, bizID, userID, amount)
+}
+
+// createOnce 落库支付单 + 微信统一下单（不做在途检查，仅由 CreatePayment 调用）
+func (s *serviceImpl) createOnce(ctx context.Context, bizType int, bizID, userID, amount int64) (*PayResult, error) {
 	no := orderid.GenNo("ZF")
 	p := &Payment{
 		PaymentNo:  no,
@@ -109,6 +151,55 @@ func (s *serviceImpl) CreatePayment(ctx context.Context, bizType int, bizID, use
 	logger.L().Info("创建支付单", zap.String("payment_no", no),
 		zap.Int("biz_type", bizType), zap.Int64("biz_id", bizID), zap.Int64("amount", amount))
 	return &PayResult{PaymentNo: no, Params: params}, nil
+}
+
+// reusePayment 复用在途单：重拉 JSAPI 参数（同单号同金额微信返回同一 prepay_id）
+func (s *serviceImpl) reusePayment(ctx context.Context, p *Payment, userID int64) (*PayResult, error) {
+	params, err := s.wx.JSAPI(ctx, s.openID(ctx, userID), p.OutTradeNo, p.Amount, "乡厨订单支付")
+	if err != nil {
+		return nil, err
+	}
+	logger.L().Info("复用在途支付单", zap.String("payment_no", p.PaymentNo), zap.Int64("amount", p.Amount))
+	return &PayResult{PaymentNo: p.PaymentNo, Params: params}, nil
+}
+
+// closePending 作废在途单：先微信关单再本地 0→4。
+// 微信关单失败（除"订单不存在"）一律中止——旧单仍可被支付，双开窗口没有真正关闭；
+// 若因"订单已支付"失败，说明用户刚付掉旧单，回调/补偿会接管，本次创建放弃
+func (s *serviceImpl) closePending(ctx context.Context, p *Payment) error {
+	if !s.mock() {
+		if err := s.wx.CloseOrder(p.OutTradeNo); err != nil {
+			var ae *wxpay.APIError
+			if !errors.As(err, &ae) || ae.Status != http.StatusNotFound {
+				return err
+			}
+			// 404：微信侧无此单（如统一下单失败遗留的本地单），无需可关
+		}
+	}
+	if _, err := s.repo.TransitPayment(ctx, p.ID, PayStatusPending, PayStatusClosed); err != nil {
+		return err
+	}
+	logger.L().Info("关闭在途支付单", zap.String("payment_no", p.PaymentNo))
+	return nil
+}
+
+// 在途单处置决策
+type createPlan int8
+
+const (
+	planReuse          createPlan = iota // 在途且同金额、剩余有效期充足 → 复用
+	planCloseAndCreate                   // 在途但金额不同或临期/已过期 → 关旧建新
+)
+
+// reuseMargin 剩余有效期低于此值不复用（避免刚复用就过期）
+const reuseMargin = 10 * time.Minute
+
+// planFor 在途单处置（纯函数，单测 payment_create_test.go）
+func planFor(p *Payment, amount int64, now time.Time) createPlan {
+	if p.Amount == amount && p.ExpireTime.After(now.Add(reuseMargin)) {
+		return planReuse
+	}
+	return planCloseAndCreate
 }
 
 // openID 实名支付需要 openid：从 users 表只读补齐（mock 模式跳过查询）
