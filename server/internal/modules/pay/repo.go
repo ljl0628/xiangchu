@@ -48,7 +48,7 @@ func (r *Repo) MarkPaid(ctx context.Context, id int64, txID string) (bool, error
 		Where("id = ? AND status = ?", id, PayStatusPending).
 		Updates(map[string]any{
 			"status":            PayStatusPaid,
-			"wx_transaction_id": txID,
+			"wx_transaction_id": txID, // 微信交易单号——钱真正划走那一刻，微信给这笔实际资金交易分配的编号
 			"pay_time":          &now,
 		})
 	return res.RowsAffected > 0, res.Error
@@ -98,6 +98,66 @@ func (r *Repo) SumGMV(ctx context.Context) (int64, error) {
 		Where("status IN ?", []int8{PayStatusPaid, PayStatusRefunding, PayStatusRefunded}).
 		Select("COALESCE(SUM(amount),0)").Scan(&sum).Error
 	return sum, err
+}
+
+// ---------- refund ----------
+
+func (r *Repo) CreateRefund(ctx context.Context, rf *Refund) error {
+	return r.q(ctx).Create(rf).Error
+}
+
+func (r *Repo) GetRefundByNo(ctx context.Context, refundNo string) (*Refund, error) {
+	var rf Refund
+	if err := r.q(ctx).Where("refund_no = ?", refundNo).First(&rf).Error; err != nil {
+		return nil, err
+	}
+	return &rf, nil
+}
+
+// TransitRefundStatus 退款单状态条件流转（乐观锁），cols 随行写入（wx_refund_id 等）
+func (r *Repo) TransitRefundStatus(ctx context.Context, id int64, from, to int8, cols map[string]any) (bool, error) {
+	ups := map[string]any{"status": to}
+	for k, v := range cols {
+		ups[k] = v
+	}
+	res := r.q(ctx).Model(&Refund{}).Where("id = ? AND status = ?", id, from).Updates(ups)
+	return res.RowsAffected > 0, res.Error
+}
+
+// SumRefundQuota 支付单名下占用退款额度的金额合计（在途 0 + 已成功 1；
+// 异常单不占额度，人工核对后另行处理）
+func (r *Repo) SumRefundQuota(ctx context.Context, paymentNo string) (int64, error) {
+	var sum int64
+	err := r.q(ctx).Model(&Refund{}).
+		Where("payment_no = ? AND status IN ?", paymentNo, []int8{RefundStatusProcessing, RefundStatusSuccess}).
+		Select("COALESCE(SUM(amount),0)").Scan(&sum).Error
+	return sum, err
+}
+
+// ---------- notify ----------
+
+// CreateNotify 通知流水落行；微信通知 ID 撞唯一键即重复推送（由调用方判定）
+func (r *Repo) CreateNotify(ctx context.Context, n *PaymentNotify) error {
+	return r.q(ctx).Create(n).Error
+}
+
+// GetNotifyByWxID 按微信通知 ID 取已有流水行（重复推送时查上次处理结果）
+func (r *Repo) GetNotifyByWxID(ctx context.Context, notifyID string) (*PaymentNotify, error) {
+	var n PaymentNotify
+	if err := r.q(ctx).Where("notify_id = ?", notifyID).First(&n).Error; err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
+// FinishNotify 回填处理结果（OK/IGNORE/ERROR 与原因）
+func (r *Repo) FinishNotify(ctx context.Context, id int64, outTradeNo, result, errMsg string) error {
+	return r.q(ctx).Model(&PaymentNotify{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"out_trade_no": outTradeNo,
+			"result":       result,
+			"error_msg":    errMsg,
+		}).Error
 }
 
 // ---------- settlement ----------

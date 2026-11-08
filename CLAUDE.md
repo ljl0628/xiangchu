@@ -71,7 +71,7 @@ Go 1.22 模块化单体（Gin + GORM）。`server/internal/`：
 
 - **响应**：一律 HTTP 200 + `R{code, msg, data}`，`code=0` 成功；错误经 `pkg/errs` 的 `*errs.Err` 传给 `response.Fail`。分页用 `response.PageData`
 - **金额一律 int64 分**，费率用基点 BP（3% = 300），计算用 shopspring/decimal，展示层分转元
-- **并发/幂等四处双保险**：档期锁 = Redis SETNX + `chef_schedules` 唯一索引；库存 = `locked_stock` 行级更新 + RowsAffected 校验防超卖；支付记账 = `payments.out_trade_no` 唯一索引 + 状态只向前流转；支付创建 = 在途单复用/关旧建新 + 生成列条件唯一键 `uk_payments_active`（同业务单仅一笔在途，防双开超付）
+- **并发/幂等五处双保险**：档期锁 = Redis SETNX + `chef_schedules` 唯一索引；库存 = `locked_stock` 行级更新 + RowsAffected 校验防超卖；支付记账 = `payments.out_trade_no` 唯一索引 + 状态只向前流转；支付创建 = 在途单复用/关旧建新 + 生成列条件唯一键 `uk_payments_active`（同业务单仅一笔在途，防双开超付）；退款 = 支付单 1→2 乐观锁拦并发重复发起 + `refunds` 额度合计（在途+已成功）≤ 实付防超退；回调重复推送 = `payment_notifies` 唯一键（微信通知 ID）挡重复落行 + 业务侧条件更新幂等
 - 订单状态机：0待支付→1待接单→2已接单→3备菜中→4服务中→5已完成，6已取消/7已拒绝；待接单超 12 小时由 RabbitMQ 延迟消息（`xc.delay` 交换机）自动取消退款。改状态流转逻辑先看 order/service.go 与 docs/api.md 的状态机注释
 - MQ 拓扑：`xc.delay`（延迟）+ `xc.event`（topic）+ `xc.dlx`（死信），见 `internal/infra/mq`
 
@@ -99,11 +99,12 @@ pnpm workspace，`web/packages/shared` 是关键：
 
 ## 一期已知边界（不要找不存在的实现）
 
-- 微信支付回调已支持真实模式：`wxpay.Client.ParseNotify` 做平台证书验签（`/v3/certificates` 自动下载缓存，未知 serial 自动刷新）+ AES-256-GCM 解密；单测在 `internal/infra/wxpay/notify_test.go`。**退款结果仍为 mock 即时成功，真实退款回调确认未接**
+- 微信支付回调已支持真实模式：`wxpay.Client.ParseNotify` 做平台证书验签（`/v3/certificates` 自动下载缓存，未知 serial 自动刷新）+ AES-256-GCM 解密；回调先落 `payment_notifies` 通知流水（uk=微信通知 ID）再处理，**金额与本地支付单不符拒绝入账**；单测在 `internal/infra/wxpay/notify_test.go`
+- 退款走 `refunds` 表（挂支付单，微信退款以交易为单位）：发起时额度校验 + 落单再调微信，`REFUND.SUCCESS` 回调终态化（退款单 0→1、支付单 2→3）；ABNORMAL/CLOSED 置异常单并回滚支付单待人工。**退款方向的查单补偿未做**（回调丢失时退款单停在退款中）
 - 短信通道未接入（dev 固定验证码）
 - 操作日志自动记录仅覆盖 admin 模块自身路由，各业务模块的 `/admin/*` 端点已鉴权但不落日志
 - 提现一期线下打款 + 后台标记，无自动转账
-- 仓库目前仅 `wxpay/notify_test.go` 一处单测（回调验签解密链路），其余模块无用例
+- 单测均为纯函数级：`wxpay`（回调验签解密、支付/退款通知解码）、`pay`（查单动作映射、创建幂等计划）、`order`（状态机不变式与非法流转拦截），暂无集成测试
 
 ## 部署
 

@@ -77,7 +77,7 @@ func (s *serviceImpl) compensateOnce() {
 }
 
 func (s *serviceImpl) compensateOne(ctx context.Context, p *Payment) {
-	q, err := s.wx.QueryOrderByOutTradeNo(p.OutTradeNo)
+	q, err := s.wx.QueryOrderByOutTradeNo(p.OutTradeNo) // 注意：TransactionID是通过微信返回的，根据outTrandeNo向微信查单
 	if err != nil {
 		// 网络抖动等瞬时错误：本轮跳过，下一轮重试
 		logger.L().Warn("查单失败", zap.String("payment_no", p.PaymentNo), zap.Error(err))

@@ -14,13 +14,59 @@ import (
 	"time"
 )
 
-// NotifyResult 回调解密后的支付结果。真实模式解出的明文即 V3 交易通知结构，
-// out_trade_no / transaction_id / trade_state 三个字段与 mock 明文 JSON 一致，
-// 下游 HandleWxNotify 无需区分模式。
-type NotifyResult struct {
+// 回调事件类型（V3 event_type）
+const (
+	EventPaySuccess     = "TRANSACTION.SUCCESS"
+	EventRefundSuccess  = "REFUND.SUCCESS"
+	EventRefundAbnormal = "REFUND.ABNORMAL"
+	EventRefundClosed   = "REFUND.CLOSED"
+)
+
+// Notify 回调解析产物：信封元数据 + 解密后的资源明文。
+// 业务字段结构随 event_type 而异（支付/退款），由 DecodePayNotify / DecodeRefundNotify 解出
+type Notify struct {
+	ID        string // 微信通知 ID；重试推送同 ID，可作幂等键。mock 模式为空
+	EventType string // TRANSACTION.SUCCESS / REFUND.SUCCESS / ...
+	Plain     []byte // resource 解密明文（mock 模式即原始 body，且强制 trade_state=SUCCESS）
+}
+
+// PayNotifyResource TRANSACTION.SUCCESS 明文结构（金额校验用 amount.total）
+type PayNotifyResource struct {
 	OutTradeNo    string `json:"out_trade_no"`
 	TransactionID string `json:"transaction_id"`
 	TradeState    string `json:"trade_state"`
+	Amount        struct {
+		Total int64 `json:"total"` // 订单总金额（分）
+	} `json:"amount"`
+}
+
+// RefundNotifyResource REFUND.SUCCESS / ABNORMAL / CLOSED 明文结构
+type RefundNotifyResource struct {
+	OutTradeNo   string `json:"out_trade_no"`
+	OutRefundNo  string `json:"out_refund_no"`
+	RefundID     string `json:"refund_id"`
+	RefundStatus string `json:"refund_status"` // SUCCESS / ABNORMAL / CLOSED
+	Amount       struct {
+		Refund int64 `json:"refund"` // 退款金额（分）
+	} `json:"amount"`
+}
+
+// DecodePayNotify 支付结果通知明文 → 结构
+func DecodePayNotify(plain []byte) (*PayNotifyResource, error) {
+	var r PayNotifyResource
+	if err := json.Unmarshal(plain, &r); err != nil {
+		return nil, fmt.Errorf("支付通知明文解析失败: %w", err)
+	}
+	return &r, nil
+}
+
+// DecodeRefundNotify 退款结果通知明文 → 结构
+func DecodeRefundNotify(plain []byte) (*RefundNotifyResource, error) {
+	var r RefundNotifyResource
+	if err := json.Unmarshal(plain, &r); err != nil {
+		return nil, fmt.Errorf("退款通知明文解析失败: %w", err)
+	}
+	return &r, nil
 }
 
 // notifyEnvelope V3 回调请求体（密文信封）
@@ -36,22 +82,29 @@ type notifyEnvelope struct {
 }
 
 // ParseNotify 解析微信支付回调：
-//   - mock/未启用：接受明文 JSON（NotifyResult 结构）
+//   - mock/未启用：接受明文 JSON（补齐 trade_state=SUCCESS），与真实模式同构
 //   - 真实模式：Wechatpay-* 头验签（平台证书）+ resource 密文 AES-256-GCM 解密
-func (c *Client) ParseNotify(headers http.Header, body []byte) (*NotifyResult, error) {
+func (c *Client) ParseNotify(headers http.Header, body []byte) (*Notify, error) {
 	if c.cfg.Mock || !c.cfg.Enabled {
-		var plain NotifyResult
-		if err := json.Unmarshal(body, &plain); err != nil {
+		// mock 明文按支付通知补默认值，下游解码逻辑与真实模式完全一致
+		var m map[string]any
+		if err := json.Unmarshal(body, &m); err != nil {
 			return nil, err
 		}
-		plain.TradeState = "SUCCESS"
-		return &plain, nil
+		if _, ok := m["trade_state"]; !ok {
+			m["trade_state"] = "SUCCESS"
+		}
+		plain, err := json.Marshal(m)
+		if err != nil {
+			return nil, err
+		}
+		return &Notify{Plain: plain}, nil
 	}
 	return c.parseReal(headers, body)
 }
 
 // parseReal 真实模式回调处理：头齐全性 → 时间戳窗口 → 平台证书验签 → 密文解密
-func (c *Client) parseReal(headers http.Header, body []byte) (*NotifyResult, error) {
+func (c *Client) parseReal(headers http.Header, body []byte) (*Notify, error) {
 	serial := headers.Get("Wechatpay-Serial")
 	tsStr := headers.Get("Wechatpay-Timestamp")
 	nonceHdr := headers.Get("Wechatpay-Nonce")
@@ -86,11 +139,7 @@ func (c *Client) parseReal(headers http.Header, body []byte) (*NotifyResult, err
 	if err != nil {
 		return nil, err
 	}
-	var res NotifyResult
-	if err := json.Unmarshal(plain, &res); err != nil { // 明文即 NotifyResult 同构 JSON
-		return nil, fmt.Errorf("解密明文非 NotifyResult: %w", err)
-	}
-	return &res, nil
+	return &Notify{ID: env.ID, EventType: env.EventType, Plain: plain}, nil
 }
 
 // verifySignature 平台证书公钥 RSA-SHA256 验签。

@@ -215,6 +215,23 @@ CREATE TABLE `payments` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `payment_notifies` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `notify_id` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '微信通知 ID；重试推送同 ID。mock 明文无 ID 记 NULL（唯一键忽略 NULL）',
+  `event_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT 'TRANSACTION.SUCCESS / REFUND.SUCCESS 等',
+  `out_trade_no` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `raw_body` text COLLATE utf8mb4_unicode_ci COMMENT 'resource 解密明文，排障用',
+  `result` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT 'OK / IGNORE / ERROR',
+  `error_msg` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `created_at` datetime(3) DEFAULT NULL,
+  `updated_at` datetime(3) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_payment_notifies_notify_id` (`notify_id`),
+  KEY `idx_payment_notifies_out_trade_no` (`out_trade_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='微信回调通知流水';
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `purchase_items` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `purchase_order_id` bigint DEFAULT NULL,
@@ -252,6 +269,27 @@ CREATE TABLE `purchase_orders` (
   KEY `idx_purchase_orders_chef_id` (`chef_id`),
   KEY `idx_purchase_orders_supplier_id` (`supplier_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `refunds` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `refund_no` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '我方退款单号，同时作为 out_refund_no 传微信',
+  `payment_no` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '锚定支付单（微信退款以交易为单位）',
+  `biz_type` tinyint NOT NULL DEFAULT '1' COMMENT '冗余自支付单 1宴席 2采购',
+  `biz_id` bigint NOT NULL,
+  `amount` bigint NOT NULL COMMENT '退款金额（分），部分退款即多行',
+  `status` tinyint NOT NULL DEFAULT '0' COMMENT '0退款中 1成功 2异常',
+  `wx_refund_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT '微信退款单号，回调回填',
+  `reason` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `success_time` datetime(3) DEFAULT NULL,
+  `created_at` datetime(3) DEFAULT NULL,
+  `updated_at` datetime(3) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_refunds_no` (`refund_no`),
+  KEY `idx_refunds_payment` (`payment_no`),
+  KEY `idx_refunds_status_created` (`status`,`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='退款单';
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;

@@ -61,8 +61,12 @@ func TestParseNotifyRealFullFlow(t *testing.T) {
 		certsAt: time.Now(),
 	}
 
-	// 构造明文 → AES-GCM 加密成 resource 密文信封
-	plain := NotifyResult{OutTradeNo: "ZF20260101001", TransactionID: "wxpay_txn_001", TradeState: "SUCCESS"}
+	// 构造明文 → AES-GCM 加密成 resource 密文信封（含金额，覆盖 amount.total 解析）
+	var plain PayNotifyResource
+	plain.OutTradeNo = "ZF20260101001"
+	plain.TransactionID = "wxpay_txn_001"
+	plain.TradeState = "SUCCESS"
+	plain.Amount.Total = 100
 	plainJSON, _ := json.Marshal(plain)
 	nonce := "testnonce123" // 恰好 12 字节
 	block, _ := aes.NewCipher([]byte(c.cfg.APIv3Key))
@@ -86,13 +90,21 @@ func TestParseNotifyRealFullFlow(t *testing.T) {
 	headers.Set("Wechatpay-Nonce", "hdr-nonce")
 	headers.Set("Wechatpay-Signature", base64.StdEncoding.EncodeToString(sig))
 
-	// 1) 正常链路：验签 + 解密成功，解出正确支付结果
+	// 1) 正常链路：验签 + 解密成功，信封元数据 + 明文解码均正确
 	res, err := c.ParseNotify(headers, []byte(body))
 	if err != nil {
 		t.Fatalf("正常链路应成功: %v", err)
 	}
-	if res.OutTradeNo != "ZF20260101001" || res.TransactionID != "wxpay_txn_001" || res.TradeState != "SUCCESS" {
-		t.Fatalf("解析结果不符: %+v", res)
+	if res.ID != "evt_1" || res.EventType != EventPaySuccess {
+		t.Fatalf("信封元数据不符: %+v", res)
+	}
+	pay, err := DecodePayNotify(res.Plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pay.OutTradeNo != "ZF20260101001" || pay.TransactionID != "wxpay_txn_001" ||
+		pay.TradeState != "SUCCESS" || pay.Amount.Total != 100 {
+		t.Fatalf("支付结果解码不符: %+v", pay)
 	}
 
 	// 2) 篡改请求体 → 验签失败
@@ -141,7 +153,28 @@ func TestParseNotifyMock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.OutTradeNo != "ZF20260101001" || res.TradeState != "SUCCESS" {
-		t.Fatalf("mock 解析结果不符: %+v", res)
+	if res.ID != "" || res.EventType != "" {
+		t.Fatalf("mock 模式不应有信封元数据: %+v", res)
+	}
+	pay, err := DecodePayNotify(res.Plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pay.OutTradeNo != "ZF20260101001" || pay.TradeState != "SUCCESS" {
+		t.Fatalf("mock 解析结果不符: %+v", pay)
+	}
+}
+
+// TestDecodeRefundNotify 退款通知明文解码：out_refund_no / refund_id / refund_status / 金额
+func TestDecodeRefundNotify(t *testing.T) {
+	plain := []byte(`{"out_trade_no":"ZF20260101001","out_refund_no":"TK20260101001",` +
+		`"refund_id":"wx_rf_001","refund_status":"SUCCESS","amount":{"refund":60}}`)
+	r, err := DecodeRefundNotify(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.OutRefundNo != "TK20260101001" || r.RefundID != "wx_rf_001" ||
+		r.RefundStatus != "SUCCESS" || r.Amount.Refund != 60 {
+		t.Fatalf("退款通知解码不符: %+v", r)
 	}
 }

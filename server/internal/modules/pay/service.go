@@ -24,13 +24,13 @@ import (
 type Service interface {
 	// CreatePayment 创建支付单并返回 JSAPI 调起参数（bizType 1宴席 2采购）
 	CreatePayment(ctx context.Context, bizType int, bizID, userID, amount int64) (*PayResult, error)
-	// HandleWxNotify 处理微信支付回调：验签解析 + 记账 + 发布 pay.success
+	// HandleWxNotify 处理微信回调（支付/退款）：验签解析 + 通知流水 + 记账/退款推进
 	HandleWxNotify(ctx context.Context, headers http.Header, body []byte) (string, error)
 	// MockPay 模拟支付（联调）：待支付 → 已支付
 	MockPay(ctx context.Context, paymentNo string) error
 	// StartCompensator 启动查单补偿循环（真实模式；回调丢失时主动向微信对齐支付结果）
 	StartCompensator()
-	// Refund 发起退款；mock 模式即时成功并发布 pay.refunded
+	// Refund 发起退款（落退款单）；mock 即时成功，真实模式等 REFUND.SUCCESS 回调确认
 	Refund(ctx context.Context, paymentNo string, refundFen int64) error
 	// CreateSettlement 按费率生成结算单（v1 即时结算，status=1）
 	CreateSettlement(ctx context.Context, role int8, targetID int64, bizNo string, gross int64) error
@@ -133,9 +133,9 @@ func (s *serviceImpl) createOnce(ctx context.Context, bizType int, bizID, userID
 	no := orderid.GenNo("ZF")
 	p := &Payment{
 		PaymentNo:  no,
-		OutTradeNo: no,
-		BizType:    int8(bizType),
-		BizID:      bizID,
+		OutTradeNo: no,            // 商户订单号，要传给微信
+		BizType:    int8(bizType), // 支付类型：宴席1、采购2
+		BizID:      bizID,         // 所指那张表的主键，1→orders.id，2→purchase_orders.id
 		UserID:     userID,
 		Amount:     amount,
 		Status:     PayStatusPending,
@@ -227,26 +227,122 @@ func (s *serviceImpl) markPaid(ctx context.Context, p *Payment, txID string) err
 	return nil
 }
 
-// HandleWxNotify 微信支付回调：解析（真实模式含验签解密）+ 记账 + 发布 pay.success
+// HandleWxNotify 微信回调统一入口：验签解析 → 通知流水落行（uk=通知 ID 挡重复落行）
+// → 按 event_type 分流（支付成功记账 / 退款结果推进）→ 回填处理结果。
+// 返回支付单号（退款事件为空）；error 非空时 handler 应答 FAIL，微信将重推
 func (s *serviceImpl) HandleWxNotify(ctx context.Context, headers http.Header, body []byte) (string, error) {
-	res, err := s.wx.ParseNotify(headers, body)
+	n, err := s.wx.ParseNotify(headers, body)
 	if err != nil {
 		return "", err
 	}
+
+	// 通知流水先落行：一行一次推送；撞唯一键 = 微信重推（重试推送同通知 ID）
+	logRow := &PaymentNotify{EventType: n.EventType, RawBody: string(n.Plain)}
+	if n.ID != "" {
+		logRow.NotifyID = &n.ID
+	}
+	if err := s.repo.CreateNotify(ctx, logRow); err != nil {
+		if !isDuplicateKey(err) || n.ID == "" {
+			return "", err
+		}
+		// 重复推送：上次已处理成功直接应答（微信停止重试）；
+		// 上次失败/中断则重处理——业务侧均为条件更新，天然幂等
+		prev, e := s.repo.GetNotifyByWxID(ctx, n.ID)
+		if e != nil {
+			return "", err
+		}
+		if prev.Result == NotifyResultOK {
+			return "", nil
+		}
+		logRow = prev
+	}
+
+	outTradeNo, replyNo, result, perr := s.dispatchNotify(ctx, n)
+	msg := ""
+	if perr != nil {
+		result, msg = NotifyResultError, perr.Error()
+		logger.L().Error("微信回调处理失败", zap.String("event_type", n.EventType), zap.Error(perr))
+	}
+	if err := s.repo.FinishNotify(ctx, logRow.ID, outTradeNo, result, msg); err != nil {
+		logger.L().Error("通知流水结果回填失败", zap.Int64("id", logRow.ID), zap.Error(err))
+	}
+	return replyNo, perr
+}
+
+// dispatchNotify 按事件类型分流；返回（out_trade_no 供流水记录 / 应答用单号 / 处理结果 / 错误）
+func (s *serviceImpl) dispatchNotify(ctx context.Context, n *wxpay.Notify) (string, string, string, error) {
+	switch n.EventType {
+	case wxpay.EventRefundSuccess, wxpay.EventRefundAbnormal, wxpay.EventRefundClosed:
+		return s.handleRefundNotify(ctx, n)
+	default:
+		// TRANSACTION.SUCCESS 及 mock 明文（无 event_type）一律按支付通知处理
+		return s.handlePayNotify(ctx, n)
+	}
+}
+
+// handlePayNotify 支付结果通知：金额校验 → 记账 → 广播 pay.success
+func (s *serviceImpl) handlePayNotify(ctx context.Context, n *wxpay.Notify) (string, string, string, error) {
+	res, err := wxpay.DecodePayNotify(n.Plain)
+	if err != nil {
+		return "", "", NotifyResultError, err
+	}
 	if res.TradeState != "SUCCESS" {
-		// V3 支付通知只在支付成功时推送；其余状态记日志后应答 SUCCESS，避免微信对终态反复重试
-		logger.L().Warn("微信回调交易状态非成功，忽略并应答 SUCCESS",
+		// V3 支付通知只在支付成功时推送；其余状态记流水后应答，避免微信对终态反复重试
+		logger.L().Warn("微信回调交易状态非成功，忽略并应答",
 			zap.String("out_trade_no", res.OutTradeNo), zap.String("trade_state", res.TradeState))
-		return "", nil
+		return res.OutTradeNo, "", NotifyResultIgnore, nil
 	}
 	p, err := s.repo.GetPaymentByOutTradeNo(ctx, res.OutTradeNo)
 	if err != nil {
-		return "", err
+		return res.OutTradeNo, "", NotifyResultError, err
 	}
+	// 金额校验：回调金额必须与本地支付单一致，不符拒绝入账（应答 FAIL 由微信重推，
+	// 重推仍不符则持续失败，人工介入）。真实模式微信必带 amount.total，mock 明文可省略
+	if res.Amount.Total != 0 && res.Amount.Total != p.Amount {
+		logger.L().Error("回调金额与本地支付单不符，拒绝入账",
+			zap.String("out_trade_no", res.OutTradeNo),
+			zap.Int64("notify_amount", res.Amount.Total), zap.Int64("local_amount", p.Amount))
+		return res.OutTradeNo, "", NotifyResultError, errs.ErrAmountWrong
+	}
+	// TransactionID微信交易单号——钱真正划走那一刻，微信给这笔实际资金交易分配的编号
 	if err := s.markPaid(ctx, p, res.TransactionID); err != nil {
-		return "", err
+		return res.OutTradeNo, "", NotifyResultError, err
 	}
-	return p.PaymentNo, nil
+	return res.OutTradeNo, p.PaymentNo, NotifyResultOK, nil
+}
+
+// handleRefundNotify 退款结果通知：成功则终态化（退款单 0→1、支付单 2→3、广播）；
+// 异常/关闭置异常单并回滚支付单为已支付，人工跟进
+func (s *serviceImpl) handleRefundNotify(ctx context.Context, n *wxpay.Notify) (string, string, string, error) {
+	res, err := wxpay.DecodeRefundNotify(n.Plain)
+	if err != nil {
+		return "", "", NotifyResultError, err
+	}
+	rf, err := s.repo.GetRefundByNo(ctx, res.OutRefundNo)
+	if err != nil {
+		// 本地无此退款单：应答 FAIL 让微信重推，期间人工核对
+		return res.OutTradeNo, "", NotifyResultError, err
+	}
+	p, err := s.repo.GetPaymentByNo(ctx, rf.PaymentNo)
+	if err != nil {
+		return res.OutTradeNo, "", NotifyResultError, err
+	}
+	if res.RefundStatus == "SUCCESS" {
+		s.finishRefund(ctx, rf.ID, res.RefundID, p)
+		return res.OutTradeNo, "", NotifyResultOK, nil
+	}
+	// ABNORMAL / CLOSED：钱未退成。退款单置异常、支付单回滚已支付；
+	// 后续即便再来 SUCCESS 通知，退款单已终态不可流转，以异常单 + 日志为人工排查入口
+	ok, terr := s.repo.TransitRefundStatus(ctx, rf.ID, RefundStatusProcessing, RefundStatusAbnormal,
+		map[string]any{"wx_refund_id": res.RefundID})
+	if terr == nil && ok {
+		if _, err := s.repo.TransitPayment(ctx, p.ID, PayStatusRefunding, PayStatusPaid); err != nil {
+			logger.L().Error("退款异常回滚支付单失败", zap.String("payment_no", p.PaymentNo), zap.Error(err))
+		}
+		logger.L().Error("微信退款异常/关闭，已回滚支付单待人工处理",
+			zap.String("refund_no", rf.RefundNo), zap.String("refund_status", res.RefundStatus))
+	}
+	return res.OutTradeNo, "", NotifyResultOK, nil
 }
 
 // MockPay 联调模拟支付
@@ -282,7 +378,9 @@ func (s *serviceImpl) publishEvent(p *Payment, key string) {
 	}
 }
 
-// Refund 发起退款：已支付 → 退款中；mock 模式即时已退款并广播
+// Refund 发起退款：额度校验 → 支付单 1→2 → 落退款单 → 微信受理。
+// mock 模式即时成功；真实模式退款结果由 REFUND.SUCCESS 回调推进（退款单 0→1、支付单 2→3）。
+// 当前一次只允许一笔在途退款（1→2 乐观锁拦截并发重复发起）
 func (s *serviceImpl) Refund(ctx context.Context, paymentNo string, refundFen int64) error {
 	if refundFen <= 0 {
 		return errs.ErrAmountWrong
@@ -297,6 +395,14 @@ func (s *serviceImpl) Refund(ctx context.Context, paymentNo string, refundFen in
 	if refundFen > p.Amount {
 		return errs.ErrAmountWrong
 	}
+	// 额度校验：在途 + 已成功退款累计 + 本次 ≤ 实付（部分退款防超退）
+	quota, err := s.repo.SumRefundQuota(ctx, paymentNo)
+	if err != nil {
+		return err
+	}
+	if quota+refundFen > p.Amount {
+		return errs.BadRequest("退款总额超过实付金额")
+	}
 	ok, err := s.repo.TransitPayment(ctx, p.ID, PayStatusPaid, PayStatusRefunding)
 	if err != nil {
 		return err
@@ -304,22 +410,53 @@ func (s *serviceImpl) Refund(ctx context.Context, paymentNo string, refundFen in
 	if !ok {
 		return errs.ErrStatusDenied
 	}
-	if err := s.wx.Refund(p.OutTradeNo, orderid.GenNo("TK"), refundFen, p.Amount); err != nil {
-		// 退款受理失败，回滚为已支付以便重试
+	// 先落退款单再调微信（同 createOnce 的失败方向：宁可有本地异常单，不留微信孤儿退款）
+	rf := &Refund{
+		RefundNo:  orderid.GenNo("TK"),
+		PaymentNo: paymentNo,
+		BizType:   p.BizType,
+		BizID:     p.BizID,
+		Amount:    refundFen,
+		Status:    RefundStatusProcessing,
+	}
+	if err := s.repo.CreateRefund(ctx, rf); err != nil {
 		_, _ = s.repo.TransitPayment(ctx, p.ID, PayStatusRefunding, PayStatusPaid)
 		return err
 	}
-	// 真实模式退款结果走回调确认（后续接入）；mock 即时完成
+	if err := s.wx.Refund(p.OutTradeNo, rf.RefundNo, refundFen, p.Amount); err != nil {
+		// 受理失败：退款单置异常、支付单回滚已支付以便重试
+		_, _ = s.repo.TransitRefundStatus(ctx, rf.ID, RefundStatusProcessing, RefundStatusAbnormal, nil)
+		_, _ = s.repo.TransitPayment(ctx, p.ID, PayStatusRefunding, PayStatusPaid)
+		return err
+	}
 	if s.mock() {
-		ok, err := s.repo.TransitPayment(ctx, p.ID, PayStatusRefunding, PayStatusRefunded)
-		if err != nil {
-			return err
-		}
-		if ok {
-			s.publishEvent(p, mq.KeyPayRefunded)
-		}
+		// mock 无回调，即时终态化
+		s.finishRefund(ctx, rf.ID, "MOCK"+rf.RefundNo, p)
 	}
 	return nil
+}
+
+// finishRefund 退款到账终态化：退款单 0→1（回填微信退款单号）+ 支付单 2→3 + 广播。
+// 全程条件更新，重复通知/并发只生效一次（幂等）
+func (s *serviceImpl) finishRefund(ctx context.Context, refundID int64, wxRefundID string, p *Payment) {
+	now := time.Now()
+	ok, err := s.repo.TransitRefundStatus(ctx, refundID, RefundStatusProcessing, RefundStatusSuccess,
+		map[string]any{"wx_refund_id": wxRefundID, "success_time": &now})
+	if err != nil {
+		logger.L().Error("退款单终态化失败", zap.Int64("refund_id", refundID), zap.Error(err))
+		return
+	}
+	if !ok {
+		return // 已终态，重复通知
+	}
+	done, err := s.repo.TransitPayment(ctx, p.ID, PayStatusRefunding, PayStatusRefunded)
+	if err != nil {
+		logger.L().Error("支付单退款终态流转失败", zap.String("payment_no", p.PaymentNo), zap.Error(err))
+		return
+	}
+	if done {
+		s.publishEvent(p, mq.KeyPayRefunded)
+	}
 }
 
 // getRateBP 费率解析：system_settings 覆盖 > 配置默认 > 内置兜底（BP）
