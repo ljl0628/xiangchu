@@ -30,8 +30,12 @@ func (r *Repo) Get(ctx context.Context, id int64) (*Order, error) {
 	return &o, nil
 }
 
-// Transition 状态机迁移（乐观锁：仅 from 匹配时更新），返回是否迁移成功
+// Transition 状态机迁移（乐观锁：仅 from 匹配时更新），返回是否迁移成功；
+// (from,to) 先过 checkEdge，非法流转在落库前即被拒绝
 func (r *Repo) Transition(ctx context.Context, id int64, from, to int8, cols map[string]any) (bool, error) {
+	if err := checkEdge(from, to); err != nil {
+		return false, err
+	}
 	upd := map[string]any{"status": to}
 	for k, v := range cols {
 		upd[k] = v
@@ -40,8 +44,11 @@ func (r *Repo) Transition(ctx context.Context, id int64, from, to int8, cols map
 	return res.RowsAffected > 0, res.Error
 }
 
-// TransitionByChef 带乡厨归属校验的状态迁移
+// TransitionByChef 带乡厨归属校验的状态迁移（同样受 checkEdge 约束）
 func (r *Repo) TransitionByChef(ctx context.Context, id, chefID int64, from, to int8, cols map[string]any) (bool, error) {
+	if err := checkEdge(from, to); err != nil {
+		return false, err
+	}
 	upd := map[string]any{"status": to}
 	for k, v := range cols {
 		upd[k] = v
