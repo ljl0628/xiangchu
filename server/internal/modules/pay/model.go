@@ -96,7 +96,7 @@ type Refund struct {
 // NotifyID 为空记 NULL——唯一键忽略 NULL，mock 明文回调（无信封 ID）不冲突
 type PaymentNotify struct {
 	ID         int64     `gorm:"primaryKey" json:"id"`
-	NotifyID   *string   `gorm:"size:64;uniqueIndex" json:"notify_id"`
+	NotifyID   *string   `gorm:"size:64;uniqueIndex" json:"notify_id"` // 微信通知 ID：标识一次推送，重试同 ID；不用 transaction_id（交易级，跨事件共享会吞退款通知）
 	EventType  string    `gorm:"size:32" json:"event_type"`
 	OutTradeNo string    `gorm:"size:32;index" json:"out_trade_no"`
 	RawBody    string    `gorm:"type:text" json:"raw_body"` // resource 解密明文，排障用

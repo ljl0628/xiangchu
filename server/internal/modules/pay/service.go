@@ -236,7 +236,10 @@ func (s *serviceImpl) HandleWxNotify(ctx context.Context, headers http.Header, b
 		return "", err
 	}
 
-	// 通知流水先落行：一行一次推送；撞唯一键 = 微信重推（重试推送同通知 ID）
+	// 通知流水先落行：一行一次推送；撞唯一键 = 微信重推（微信重试同一通知时 ID 不变）。
+	// 幂等键选 notify_id 而非 transaction_id/out_trade_no：那两个标识"一笔交易/业务单"，
+	// 同一交易后续还会推 REFUND.SUCCESS 等不同通知，交易级号做键会把退款通知误判成
+	// 重复推送而吞掉；notify_id 与"可能重复的东西"（推送本身）同粒度
 	logRow := &PaymentNotify{EventType: n.EventType, RawBody: string(n.Plain)}
 	if n.ID != "" {
 		logRow.NotifyID = &n.ID
