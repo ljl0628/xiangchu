@@ -106,37 +106,50 @@ func (c *Client) authHeader(method, canonicalURL string, body []byte) (string, e
 
 // do 发起 V3 API 请求并解析 JSON 响应
 func (c *Client) do(method, path string, reqBody any, out any) error {
-	if c.cfg.Mock || !c.cfg.Enabled {
-		return errMockOnly
-	}
-	var body []byte
-	if reqBody != nil {
-		body, _ = json.Marshal(reqBody)
-	}
-	req, err := http.NewRequest(method, apiBase+path, bytes.NewReader(body))
+	raw, err := c.doRaw(method, apiBase+path, reqBody)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "xiangchu-server/1.0")
-	auth, err := c.authHeader(method, path, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", auth)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("请求微信支付失败: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	// 关单等接口成功返回 204 No Content（无响应体），一并视为成功
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return &APIError{Status: resp.StatusCode, Body: string(raw)}
 	}
 	if out != nil && len(raw) > 0 {
 		return json.Unmarshal(raw, out)
 	}
 	return nil
+}
+
+// doRaw 发起 V3 API 请求返回原始响应体（账单下载等非 JSON 场景）。
+// url 可为绝对地址（download_url）或相对 path；签名串一律取 path+query
+func (c *Client) doRaw(method, url string, reqBody any) ([]byte, error) {
+	if c.cfg.Mock || !c.cfg.Enabled {
+		return nil, errMockOnly
+	}
+	var body []byte
+	if reqBody != nil {
+		body, _ = json.Marshal(reqBody)
+	}
+	if !strings.HasPrefix(url, "http") {
+		url = apiBase + url
+	}
+	req, err := http.NewRequest(method, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "xiangchu-server/1.0")
+	auth, err := c.authHeader(method, req.URL.RequestURI(), body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", auth)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求微信支付失败: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	// 关单等接口成功返回 204 No Content（无响应体），一并视为成功
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return nil, &APIError{Status: resp.StatusCode, Body: string(raw)}
+	}
+	return raw, nil
 }

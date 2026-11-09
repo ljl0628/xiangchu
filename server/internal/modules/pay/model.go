@@ -57,6 +57,27 @@ const (
 	NotifyResultError  = "ERROR"  // 处理失败（微信将重推，行内回填原因）
 )
 
+// 对账批次状态
+const (
+	ReconcileRunning int8 = 0 // 进行中
+	ReconcileDone    int8 = 1 // 完成（含无差异）
+	ReconcileFailed  int8 = 2 // 失败（拉账单/解析出错，待重试或人工）
+)
+
+// 对账差异类型
+const (
+	DiffMissingLocal   = "MISSING_LOCAL"   // 账单有本地无（掉单，最严重）
+	DiffMissingBill    = "MISSING_BILL"    // 本地已支付账单无（本地多记或账单未含）
+	DiffAmountMismatch = "AMOUNT_MISMATCH" // 金额不符
+	DiffRefundMismatch = "REFUND_MISMATCH" // 退款总额不符（按支付单聚合比对）
+)
+
+// 对账差异处置状态
+const (
+	DiffOpen   int8 = 0 // 待处理
+	DiffClosed int8 = 1 // 已处理
+)
+
 // Payment 支付单（out_trade_no 即 payment_no，独立存储以保留幂等语义）
 type Payment struct {
 	ID              int64      `gorm:"primaryKey" json:"id"`
@@ -106,6 +127,36 @@ type PaymentNotify struct {
 	ErrorMsg   string    `gorm:"size:255" json:"error_msg"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// ReconcileBatch 对账批次：一个账单日一行，uk=bill_date 防重复跑批。
+// 金额以微信账单为准、本地向其对齐；差异只记录不自动改账（v1 人工处置）
+type ReconcileBatch struct {
+	ID          int64      `gorm:"primaryKey" json:"id"`
+	BillDate    string     `gorm:"size:10;uniqueIndex" json:"bill_date"` // YYYY-MM-DD
+	Status      int8       `json:"status"`                               // 0进行中 1完成 2失败
+	TradeCount  int        `json:"trade_count"`                          // 账单支付笔数
+	TradeTotal  int64      `json:"trade_total"`                          // 账单支付总额（分）
+	LocalCount  int        `json:"local_count"`                          // 本地当日已支付笔数
+	LocalTotal  int64      `json:"local_total"`                          // 本地当日已支付总额（分）
+	DiffCount   int        `json:"diff_count"`
+	ErrorMsg    string     `gorm:"size:255" json:"error_msg"`
+	CreatedAt   time.Time  `json:"created_at"`
+	FinishedAt  *time.Time `json:"finished_at"`
+}
+
+// ReconcileDiff 对账差异明细：自动检测、人工处置
+type ReconcileDiff struct {
+	ID         int64     `gorm:"primaryKey" json:"id"`
+	BatchID    int64     `gorm:"index" json:"batch_id"`
+	BillDate   string    `gorm:"size:10;index" json:"bill_date"`
+	DiffType   string    `gorm:"size:32;index" json:"diff_type"` // MISSING_LOCAL / MISSING_BILL / AMOUNT_MISMATCH / REFUND_MISMATCH
+	OutTradeNo string    `gorm:"size:32" json:"out_trade_no"`
+	WxAmount   int64     `json:"wx_amount"`   // 账单侧金额（分）
+	LocalAmount int64    `json:"local_amount"` // 本地侧金额（分）
+	Detail     string    `gorm:"size:255" json:"detail"`
+	Status     int8      `json:"status"` // 0待处理 1已处理
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Settlement 结算单（v1 支付成功即自动结算，status=1）

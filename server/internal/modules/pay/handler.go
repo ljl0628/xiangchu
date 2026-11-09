@@ -55,6 +55,9 @@ func (p *Handler) Routes(r gin.IRouter, mk *jwtx.Maker) {
 		admin.GET("/admin/settings", p.getSettings)
 		admin.PUT("/admin/settings", p.putSettings)
 		admin.GET("/admin/finance-stats", p.financeStats)
+		admin.GET("/admin/reconciles", p.listReconciles)
+		admin.POST("/admin/reconciles", p.runReconcile)
+		admin.GET("/admin/reconciles/:id/diffs", p.listReconcileDiffs)
 	}
 }
 
@@ -380,4 +383,79 @@ func (p *Handler) financeStats(c *gin.Context) {
 		return
 	}
 	response.OK(c, vo)
+}
+
+// listReconciles 对账批次列表
+//
+//	@Tags		管理端
+//	@Security	BearerAuth
+//	@Summary	对账批次列表
+//	@Description	admin 角色；status 0进行中 1完成 2失败；金额均为分
+//	@Produce	json
+//	@Param		page	query		int		false	"页码"	Default(1)
+//	@Param		size	query		int		false	"每页条数"	Default(10)	Maximum(100)
+//	@Success	200	{object}	response.R{data=response.PageList{list=[]pay.ReconcileBatch}}
+//	@Router		/admin/reconciles [get]
+func (p *Handler) listReconciles(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "10"))
+	list, total, err := p.svc.ListReconciles(c.Request.Context(), page, size)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, response.PageData(list, total, page, size))
+}
+
+// runReconcile 手动触发对账
+//
+//	@Tags		管理端
+//	@Security	BearerAuth
+//	@Summary	手动触发对账
+//	@Description	admin 角色；指定账单日拉微信交易账单与本地核对，同日已跑（非失败）直接返回既有批次；仅真实支付模式可用
+//	@Accept		json
+//	@Produce	json
+//	@Param		req	body		pay.ReconcileRunReq	true	"账单日"
+//	@Success	200	{object}	response.R{data=pay.ReconcileBatch}
+//	@Router		/admin/reconciles [post]
+func (p *Handler) runReconcile(c *gin.Context) {
+	var req ReconcileRunReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errs.BadRequest("参数不正确"))
+		return
+	}
+	b, err := p.svc.RunReconcile(c.Request.Context(), req.BillDate)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, b)
+}
+
+// listReconcileDiffs 对账差异明细
+//
+//	@Tags		管理端
+//	@Security	BearerAuth
+//	@Summary	对账差异明细
+//	@Description	admin 角色；diff_type MISSING_LOCAL掉单/MISSING_BILL/AMOUNT_MISMATCH/REFUND_MISMATCH，status 0待处理 1已处理
+//	@Produce	json
+//	@Param		id		path		int		true	"批次ID"
+//	@Param		page	query		int		false	"页码"	Default(1)
+//	@Param		size	query		int		false	"每页条数"	Default(20)	Maximum(100)
+//	@Success	200	{object}	response.R{data=response.PageList{list=[]pay.ReconcileDiff}}
+//	@Router		/admin/reconciles/{id}/diffs [get]
+func (p *Handler) listReconcileDiffs(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.Fail(c, errs.BadRequest("参数不正确"))
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	list, total, err := p.svc.ListReconcileDiffs(c.Request.Context(), id, page, size)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, response.PageData(list, total, page, size))
 }

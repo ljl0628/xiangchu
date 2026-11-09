@@ -30,6 +30,14 @@ type Service interface {
 	MockPay(ctx context.Context, paymentNo string) error
 	// StartCompensator 启动查单补偿循环（真实模式；回调丢失时主动向微信对齐支付结果）
 	StartCompensator()
+	// StartReconciler 启动每日对账巡检循环（真实模式；昨日账单生成后自动对账）
+	StartReconciler()
+	// RunReconcile 手动触发一次对账（admin）；billDate 格式 YYYY-MM-DD，须早于今日
+	RunReconcile(ctx context.Context, billDate string) (*ReconcileBatch, error)
+	// ListReconciles 对账批次列表
+	ListReconciles(ctx context.Context, page, size int) ([]*ReconcileBatch, int64, error)
+	// ListReconcileDiffs 某批次差异明细
+	ListReconcileDiffs(ctx context.Context, batchID int64, page, size int) ([]*ReconcileDiff, int64, error)
 	// Refund 发起退款（落退款单）；mock 即时成功，真实模式等 REFUND.SUCCESS 回调确认
 	Refund(ctx context.Context, paymentNo string, refundFen int64) error
 	// CreateSettlement 按费率生成结算单（v1 即时结算，status=1）

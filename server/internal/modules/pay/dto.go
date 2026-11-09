@@ -25,6 +25,11 @@ type SettingsReq struct {
 	SupplierBP int `json:"supplier_bp" binding:"gte=0,lte=10000"`
 }
 
+// ReconcileRunReq 手动触发对账
+type ReconcileRunReq struct {
+	BillDate string `json:"bill_date" binding:"required" example:"2026-11-08"` // 账单日，须早于今日
+}
+
 // WFilter 管理端提现单筛选
 type WFilter struct {
 	Role   *int8 `form:"role"`

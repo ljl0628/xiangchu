@@ -293,6 +293,42 @@ CREATE TABLE `refunds` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `reconcile_batches` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `bill_date` varchar(10) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '账单日 YYYY-MM-DD',
+  `status` tinyint NOT NULL DEFAULT '0' COMMENT '0进行中 1完成 2失败',
+  `trade_count` int NOT NULL DEFAULT '0' COMMENT '账单支付笔数',
+  `trade_total` bigint NOT NULL DEFAULT '0' COMMENT '账单支付总额（分）',
+  `local_count` int NOT NULL DEFAULT '0' COMMENT '本地当日已支付笔数',
+  `local_total` bigint NOT NULL DEFAULT '0' COMMENT '本地当日已支付总额（分）',
+  `diff_count` int NOT NULL DEFAULT '0',
+  `error_msg` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `created_at` datetime(3) DEFAULT NULL,
+  `finished_at` datetime(3) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_reconcile_batches_date` (`bill_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='每日对账批次';
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `reconcile_diffs` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `batch_id` bigint NOT NULL,
+  `bill_date` varchar(10) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `diff_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'MISSING_LOCAL/MISSING_BILL/AMOUNT_MISMATCH/REFUND_MISMATCH',
+  `out_trade_no` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `wx_amount` bigint NOT NULL DEFAULT '0' COMMENT '账单侧金额（分）',
+  `local_amount` bigint NOT NULL DEFAULT '0' COMMENT '本地侧金额（分）',
+  `detail` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `status` tinyint NOT NULL DEFAULT '0' COMMENT '0待处理 1已处理',
+  `created_at` datetime(3) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_reconcile_diffs_batch` (`batch_id`),
+  KEY `idx_reconcile_diffs_type_status` (`diff_type`,`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='对账差异明细';
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `reviews` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `order_id` bigint DEFAULT NULL,

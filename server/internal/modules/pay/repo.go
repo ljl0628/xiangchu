@@ -160,6 +160,83 @@ func (r *Repo) FinishNotify(ctx context.Context, id int64, outTradeNo, result, e
 		}).Error
 }
 
+// ---------- reconcile ----------
+
+func (r *Repo) CreateBatch(ctx context.Context, b *ReconcileBatch) error {
+	return r.q(ctx).Create(b).Error
+}
+
+func (r *Repo) GetBatchByDate(ctx context.Context, billDate string) (*ReconcileBatch, error) {
+	var b ReconcileBatch
+	if err := r.q(ctx).Where("bill_date = ?", billDate).First(&b).Error; err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// FinishBatch 批次收尾：写统计与终态（失败批次 error_msg 携带原因）
+func (r *Repo) FinishBatch(ctx context.Context, id int64, cols map[string]any) error {
+	return r.q(ctx).Model(&ReconcileBatch{}).Where("id = ?", id).Updates(cols).Error
+}
+
+func (r *Repo) ListBatches(ctx context.Context, page, size int) ([]*ReconcileBatch, int64, error) {
+	q := r.q(ctx).Model(&ReconcileBatch{})
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var list []*ReconcileBatch
+	err := q.Order("bill_date DESC").Offset((page - 1) * size).Limit(size).Find(&list).Error
+	return list, total, err
+}
+
+func (r *Repo) CreateDiffs(ctx context.Context, diffs []*ReconcileDiff) error {
+	if len(diffs) == 0 {
+		return nil
+	}
+	return r.q(ctx).Create(&diffs).Error
+}
+
+func (r *Repo) ListDiffs(ctx context.Context, batchID int64, page, size int) ([]*ReconcileDiff, int64, error) {
+	q := r.q(ctx).Model(&ReconcileDiff{}).Where("batch_id = ?", batchID)
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var list []*ReconcileDiff
+	err := q.Order("id ASC").Offset((page - 1) * size).Limit(size).Find(&list).Error
+	return list, total, err
+}
+
+// ListPaidOnDate 本地当日已支付支付单（含退款中/已退款——曾收到的钱都要在账）
+func (r *Repo) ListPaidOnDate(ctx context.Context, start, end time.Time) ([]*Payment, error) {
+	var list []*Payment
+	err := r.q(ctx).
+		Where("status IN ? AND pay_time >= ? AND pay_time < ?",
+			[]int8{PayStatusPaid, PayStatusRefunding, PayStatusRefunded}, start, end).
+		Find(&list).Error
+	return list, err
+}
+
+// RefundSuccessAgg 成功退款按支付单聚合：payment_no（=out_trade_no 值）→ 合计（分）
+func (r *Repo) RefundSuccessAgg(ctx context.Context) (map[string]int64, error) {
+	var rows []struct {
+		PaymentNo string
+		Sum       int64
+	}
+	err := r.q(ctx).Model(&Refund{}).
+		Where("status = ?", RefundStatusSuccess).
+		Select("payment_no, SUM(amount) AS sum").Group("payment_no").Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.PaymentNo] = row.Sum
+	}
+	return out, nil
+}
+
 // ---------- settlement ----------
 
 func (r *Repo) CreateSettlement(ctx context.Context, s *Settlement) error {

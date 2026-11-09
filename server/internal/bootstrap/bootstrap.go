@@ -85,6 +85,8 @@ func Run(cfg *config.Config) error {
 
 	// 查单补偿：微信回调丢失时定时扫描待支付单主动对齐（mock 模式内部自跳过）
 	paySvc.StartCompensator()
+	// 每日对账：昨日微信账单生成后自动拉单与本地核对（mock 模式内部自跳过）
+	paySvc.StartReconciler()
 
 	return runHTTP(cfg, mk, userSvc, chefSvc, supSvc, foodSvc, paySvc, orderSvc, adminSvc, adminRepo)
 }
