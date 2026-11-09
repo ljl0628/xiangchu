@@ -558,7 +558,9 @@ func (s *serviceImpl) CreateReview(ctx context.Context, uid, id int64, req *Revi
 	return nil
 }
 
-// ApplyAfterSale 售后申请：仅已完成订单，金额不超过实付
+// ApplyAfterSale 售后申请：进行中（2-4）或已完成（5）订单，金额不超过实付。
+// 进行中审核同意 → 取消订单+退款；已完成审核同意 → 仅退款（服务已发生）。
+// 0/1 走取消通道，6/7 钱已两清，均不允许售后
 func (s *serviceImpl) ApplyAfterSale(ctx context.Context, uid, id int64, req *AfterSaleReq) error {
 	o, err := s.repo.Get(ctx, id)
 	if err != nil {
@@ -567,7 +569,9 @@ func (s *serviceImpl) ApplyAfterSale(ctx context.Context, uid, id int64, req *Af
 	if o.UserID != uid {
 		return errs.ErrNotFound
 	}
-	if o.Status != StatusDone {
+	switch o.Status {
+	case StatusAccepted, StatusPrepping, StatusServing, StatusDone:
+	default:
 		return errs.ErrStatusDenied
 	}
 	if req.Amount > o.PaidAmount {
@@ -622,6 +626,15 @@ func (s *serviceImpl) AfterSaleAudit(ctx context.Context, id int64, req *AuditRe
 		if amount > o.PaidAmount {
 			amount = o.PaidAmount
 		}
+		// 进行中订单先取消再退款（同 cancelPaid 教义：状态先行，退款收尾——
+		// 退款发起前订单已释放资源，退款失败重试不会造成半取消状态）
+		s.cancelInflight(ctx, o)
+		// refund_status=2 必须先于 Refund 落库：mock 链路退款同步终态化，
+		// pay.refunded 事件消费者会把 refund_status 推到 4——若 2 写在退款之后，
+		// 会被函数尾部的 2 覆盖成倒退（真实模式回调慢未暴露，mock 必现）
+		if err := s.repo.SetRefundStatus(ctx, o.ID, RefundApproved); err != nil {
+			return err
+		}
 		no, err := s.repo.LatestActivePaymentNo(ctx, o.ID)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -632,12 +645,11 @@ func (s *serviceImpl) AfterSaleAudit(ctx context.Context, id int64, req *AuditRe
 		if err := s.paySvc.Refund(ctx, no, amount); err != nil {
 			return err
 		}
-		if err := s.repo.UpdateAfterSale(ctx, id, map[string]any{
+		// 退款失败时售后单留在 Pending 可重审；成功后事件侧终态化 refund_status=4，
+		// 本函数不再触碰 refund_status，无覆盖风险
+		return s.repo.UpdateAfterSale(ctx, id, map[string]any{
 			"status": AfterSaleApproved, "audit_remark": req.Remark,
-		}); err != nil {
-			return err
-		}
-		return s.repo.SetRefundStatus(ctx, o.ID, RefundApproved)
+		})
 	}
 	if err := s.repo.UpdateAfterSale(ctx, id, map[string]any{
 		"status": AfterSaleRefused, "audit_remark": req.Remark,
@@ -645,6 +657,33 @@ func (s *serviceImpl) AfterSaleAudit(ctx context.Context, id int64, req *AuditRe
 		return err
 	}
 	return s.repo.SetRefundStatus(ctx, o.ID, RefundRejected)
+}
+
+// cancelInflight 售后审核通过后若订单仍在进行中（2-4）则取消并释放券/档期。
+// 状态先行（同 cancelPaid）：取消在退款发起之前，退款失败可重试而不产生半取消状态；
+// 未迁移成功说明订单已不在进行中（与乡厨推进并发，如恰好 4→5），跳过取消不影响退款——
+// 那种情形按已完成订单售后处理（仅退款）。资源释放失败仅告警不回滚，待人工
+func (s *serviceImpl) cancelInflight(ctx context.Context, o *Order) {
+	if o.Status < StatusAccepted || o.Status > StatusServing {
+		return
+	}
+	moved, err := s.repo.Transition(ctx, o.ID, o.Status, StatusCancelled, map[string]any{
+		"cancel_reason": "售后审核同意取消",
+	})
+	if err != nil || !moved {
+		logger.L().Warn("售后取消：订单状态已变化，跳过取消", zap.Int64("order_id", o.ID), zap.Error(err))
+		return
+	}
+	if o.UserCouponID > 0 {
+		_ = s.userSvc.ReleaseCoupon(o.UserCouponID)
+	}
+	if err := s.chefSvc.ReleaseSchedule(ctx, o.ChefID, o.ID); err != nil {
+		logger.L().Error("售后取消：释放档期失败，待人工处理", zap.Int64("order_id", o.ID), zap.Error(err))
+	}
+	if chefUID, err := s.repo.ChefUserID(ctx, o.ChefID); err == nil {
+		s.notify(NotifyOrderRejected, "订单已取消", "售后审核通过，订单 "+o.OrderNo+" 已取消", chefUID)
+	}
+	s.notify(NotifyOrderRejected, "订单已取消", "售后审核通过，订单已取消，退款将原路退回", o.UserID)
 }
 
 // HandleRefunded 退款到账：订单退款状态→已退款；同意中的售后单→已退款

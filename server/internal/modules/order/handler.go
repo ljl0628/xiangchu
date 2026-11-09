@@ -257,6 +257,7 @@ func (h *Handler) review(c *gin.Context) {
 //	@Tags		订单域
 //	@Security	BearerAuth
 //	@Summary	申请售后
+//	@Description	进行中（2-4）或已完成（5）订单可申请；金额不超实付；进行中订单审核同意后取消并退款
 //	@Produce	json
 //	@Param		id	path		int					true	"订单ID"
 //	@Param		req	body		order.AfterSaleReq	true	"售后申请"

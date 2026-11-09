@@ -28,6 +28,10 @@ var legalTransitions = []transition{
 	{StatusAccepted, StatusPrepping, "开始备菜"},
 	{StatusPrepping, StatusServing, "开始服务"},
 	{StatusServing, StatusDone, "完成履约"},
+	// 售后取消边：进行中订单（2-4）售后审核同意 → 取消退款（服务不再发生）
+	{StatusAccepted, StatusCancelled, "售后审核同意取消"},
+	{StatusPrepping, StatusCancelled, "售后审核同意取消"},
+	{StatusServing, StatusCancelled, "售后审核同意取消"},
 }
 
 // legalEdgeSet (from,to) → 合法

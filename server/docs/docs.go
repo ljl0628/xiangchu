@@ -1062,6 +1062,200 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/reconciles": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "admin 角色；status 0进行中 1完成 2失败；金额均为分",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "管理端"
+                ],
+                "summary": "对账批次列表",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 100,
+                        "type": "integer",
+                        "default": 10,
+                        "description": "每页条数",
+                        "name": "size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.R"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "allOf": [
+                                                {
+                                                    "$ref": "#/definitions/response.PageList"
+                                                },
+                                                {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "list": {
+                                                            "type": "array",
+                                                            "items": {
+                                                                "$ref": "#/definitions/pay.ReconcileBatch"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "admin 角色；指定账单日拉微信交易账单与本地核对，同日已跑（非失败）直接返回既有批次；仅真实支付模式可用",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "管理端"
+                ],
+                "summary": "手动触发对账",
+                "parameters": [
+                    {
+                        "description": "账单日",
+                        "name": "req",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/pay.ReconcileRunReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.R"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/pay.ReconcileBatch"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/reconciles/{id}/diffs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "admin 角色；diff_type MISSING_LOCAL掉单/MISSING_BILL/AMOUNT_MISMATCH/REFUND_MISMATCH，status 0待处理 1已处理",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "管理端"
+                ],
+                "summary": "对账差异明细",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "批次ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 100,
+                        "type": "integer",
+                        "default": 20,
+                        "description": "每页条数",
+                        "name": "size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.R"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "allOf": [
+                                                {
+                                                    "$ref": "#/definitions/response.PageList"
+                                                },
+                                                {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "list": {
+                                                            "type": "array",
+                                                            "items": {
+                                                                "$ref": "#/definitions/pay.ReconcileDiff"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/admin/reviews": {
             "get": {
                 "security": [
@@ -3330,6 +3524,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "进行中（2-4）或已完成（5）订单可申请；金额不超实付；进行中订单审核同意后取消并退款",
                 "produces": [
                     "application/json"
                 ],
@@ -6496,6 +6691,102 @@ const docTemplate = `{
                 },
                 "total_withdrawn": {
                     "type": "integer"
+                }
+            }
+        },
+        "pay.ReconcileBatch": {
+            "type": "object",
+            "properties": {
+                "bill_date": {
+                    "description": "YYYY-MM-DD",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "diff_count": {
+                    "type": "integer"
+                },
+                "error_msg": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "local_count": {
+                    "description": "本地当日已支付笔数",
+                    "type": "integer"
+                },
+                "local_total": {
+                    "description": "本地当日已支付总额（分）",
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "0进行中 1完成 2失败",
+                    "type": "integer"
+                },
+                "trade_count": {
+                    "description": "账单支付笔数",
+                    "type": "integer"
+                },
+                "trade_total": {
+                    "description": "账单支付总额（分）",
+                    "type": "integer"
+                }
+            }
+        },
+        "pay.ReconcileDiff": {
+            "type": "object",
+            "properties": {
+                "batch_id": {
+                    "type": "integer"
+                },
+                "bill_date": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "diff_type": {
+                    "description": "MISSING_LOCAL / MISSING_BILL / AMOUNT_MISMATCH / REFUND_MISMATCH",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "local_amount": {
+                    "description": "本地侧金额（分）",
+                    "type": "integer"
+                },
+                "out_trade_no": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "0待处理 1已处理",
+                    "type": "integer"
+                },
+                "wx_amount": {
+                    "description": "账单侧金额（分）",
+                    "type": "integer"
+                }
+            }
+        },
+        "pay.ReconcileRunReq": {
+            "type": "object",
+            "required": [
+                "bill_date"
+            ],
+            "properties": {
+                "bill_date": {
+                    "description": "账单日，须早于今日",
+                    "type": "string",
+                    "example": "2026-11-08"
                 }
             }
         },

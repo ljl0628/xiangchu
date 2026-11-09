@@ -56,6 +56,12 @@ func TestCheckEdge(t *testing.T) {
 			t.Errorf("合法边 %d→%d 被误拒: %v", e.From, e.To, err)
 		}
 	}
+	// 售后取消边显式断言：进行中订单（2/3/4）审核同意 → 取消（防表被误删）
+	for _, from := range []int8{StatusAccepted, StatusPrepping, StatusServing} {
+		if err := checkEdge(from, StatusCancelled); err != nil {
+			t.Errorf("售后取消边 %d→%d 被误拒: %v", from, StatusCancelled, err)
+		}
+	}
 	illegal := [][2]int8{
 		{StatusUnpaid, StatusDone},      // 跳态
 		{StatusDone, StatusPending},     // 终态出边

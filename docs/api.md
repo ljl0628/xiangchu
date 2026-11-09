@@ -46,7 +46,7 @@
 | POST | /orders/:id/cancel | 取消（未接单） | user |
 | POST | /orders/:id/pay-balance | 补尾款 | user |
 | POST | /orders/:id/review | 评价（仅已完成，一单一评） | user |
-| POST | /orders/:id/aftersale | 申请售后退款 | user |
+| POST | /orders/:id/aftersale | 申请售后退款（进行中 2-4 或已完成 5；进行中审核同意=取消+退款） | user |
 | GET | /chef/orders | 乡厨订单列表 | chef |
 | GET | /chef/orders/:id | 乡厨订单详情 | chef |
 | POST | /chef/orders/:id/accept | 接单（1→2） | chef |
@@ -56,7 +56,7 @@
 | POST | /chef/orders/:id/complete | 完成（4→5，触发结算+评分） | chef |
 
 状态机：0待支付 → 1待接单 → 2已接单 → 3备菜中 → 4服务中 → 5已完成；
-1 超时 **12 小时**未接单自动取消并退款；1→7 拒单退款；6已取消 / 7已拒绝。
+1 超时 **12 小时**未接单自动取消并退款；1→7 拒单退款；2/3/4→6 售后审核同意取消退款；6已取消 / 7已拒绝。
 退款：refund_status 0无 1申请中 2已同意 3已拒绝 4已退款。
 
 ## 4 采购供应域
@@ -121,6 +121,9 @@
 | POST | /admin/withdrawals/:id/mark-paid | 标记已打款（线下转账） |
 | GET/PUT | /admin/settings | 佣金费率读取/修改 |
 | GET | /admin/finance-stats | 财务总览 |
+| GET | /admin/reconciles | 对账批次列表（status 0进行中 1完成 2失败） |
+| POST | /admin/reconciles | 手动触发对账（body: 账单日；同日已跑非失败直接返回既有批次，仅真实支付模式） |
+| GET | /admin/reconciles/:id/diffs | 对账差异明细（MISSING_LOCAL掉单/MISSING_BILL/AMOUNT_MISMATCH/REFUND_MISMATCH） |
 
 ## 7 异步消息（RabbitMQ）
 | 交换机 | routing key | 队列 | 说明 |

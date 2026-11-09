@@ -60,7 +60,7 @@
           补尾款 ¥{{ yuan(order.amount - order.paid_amount) }}
         </view>
         <view v-if="order.status === 5" class="btn-plain grow" @click="goReview">评价订单</view>
-        <view v-if="order.status === 5" class="btn-primary grow" @click="goAftersale">申请售后</view>
+        <view v-if="[2, 3, 4, 5].includes(order.status)" class="btn-primary grow" @click="goAftersale">申请售后</view>
       </view>
     </template>
     <view v-else class="empty">{{ loading ? '加载中...' : '订单不存在' }}</view>
